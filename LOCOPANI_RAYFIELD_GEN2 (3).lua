@@ -85,12 +85,52 @@ local function LOCOPANI_ActivateKey(key)
         ("Ativação recusada: " .. tostring(data.status or "resposta desconhecida"))
 end
 
+-- Lembra a key neste executor para não pedir novamente em cada execução.
+-- A key salva NUNCA é considerada válida sem nova confirmação do Supabase.
+local LOCOPANI_KEY_FILE = "locopani_key.dat"
+
+local function LOCOPANI_GetSavedKey()
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    local isfileFn = env.isfile or isfile
+    local readfileFn = env.readfile or readfile
+    if type(isfileFn) ~= "function" or type(readfileFn) ~= "function" then
+        return nil
+    end
+    local okExists, exists = pcall(isfileFn, LOCOPANI_KEY_FILE)
+    if not okExists or not exists then return nil end
+    local okRead, saved = pcall(readfileFn, LOCOPANI_KEY_FILE)
+    if not okRead or type(saved) ~= "string" then return nil end
+    saved = string.upper(string.gsub(saved, "%s+", ""))
+    if saved == "" then return nil end
+    return saved
+end
+
+local function LOCOPANI_SaveKey(key)
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    local writefileFn = env.writefile or writefile
+    if type(writefileFn) == "function" then
+        pcall(writefileFn, LOCOPANI_KEY_FILE, key)
+    end
+end
+
 local function LOCOPANI_ShowKeyGate()
     local enteredKey = ""
     local accepted = false
     local busy = false
     local statusText = nil
     local statusLabel = nil
+
+    -- Primeiro tenta validar a key salva. Se expirou ou o servidor recusar,
+    -- continua para a tela normal de key.
+    local savedKey = LOCOPANI_GetSavedKey()
+    if savedKey then
+        local savedValid = false
+        local verifyOK, verifyResult = pcall(LOCOPANI_ActivateKey, savedKey)
+        savedValid = verifyOK and verifyResult == true
+        if savedValid then
+            return true
+        end
+    end
 
     -- A interface do sistema de key usa Rayfield Gen2; a lógica de ativação Supabase permanece igual.
     local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
@@ -132,6 +172,7 @@ local function LOCOPANI_ShowKeyGate()
 
             local valid, message = LOCOPANI_ActivateKey(entered)
             if valid then
+                LOCOPANI_SaveKey(entered)
                 accepted = true
                 if statusText and statusText.Set then
                     pcall(function() statusText:Set("Chave validada. Iniciando LOCOPANI...") end)
