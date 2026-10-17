@@ -2,20 +2,87 @@ local LOCOPANI_RAY_WINDOW
 local LOCOPANI_RAYFIELD
 local LOCOPANI_RAY_VISIBLE = true
 
--- LOCOPANI MANUAL KEY SYSTEM
--- Keys are managed manually in this table. Add/remove keys here before distributing the script.
-local LOCOPANI_VALID_KEYS = {
-    ["LOCO-7K2P-M9QX"] = true,
-    ["LOCO-4R8N-T6VW"] = true,
-    ["LOCO-9C3F-H2KD"] = true,
-    ["LOCO-5Y7B-P8LM"] = true,
-    ["LOCO-2W6J-X4QA"] = true,
-    ["LOCO-8M1D-R5TZ"] = true,
-    ["LOCO-3H9V-K7NP"] = true,
-    ["LOCO-6Q2A-Y8FC"] = true,
-    ["LOCO-1T5X-B3RW"] = true,
-    ["LOCO-7N4K-D9HJ"] = true,
-}
+-- LOCOPANI SUPABASE KEY SYSTEM
+-- The Supabase Edge Function must atomically bind each key to its first userId.
+local LOCOPANI_ACTIVATE_URL =
+    "https://hshqmleifwkvzjrefabj.supabase.co/functions/v1/locopani-activate"
+
+local function LOCOPANI_ActivateKey(key)
+    local Players = game:GetService("Players")
+    local HttpService = game:GetService("HttpService")
+    local player = Players.LocalPlayer
+
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    local requestFn = env.request or env.http_request
+    if not requestFn and type(env.syn) == "table" then
+        requestFn = env.syn.request
+    end
+    if not requestFn and type(env.http) == "table" then
+        requestFn = env.http.request
+    end
+    if not requestFn and type(env.fluxus) == "table" then
+        requestFn = env.fluxus.request
+    end
+
+    if type(requestFn) ~= "function" then
+        return false, "Este executor não disponibiliza uma função HTTP compatível."
+    end
+
+    -- Campos esperados pela Edge Function locopani-activate.
+    local requestBody = HttpService:JSONEncode({
+        key_code = key,
+        roblox_user_id = tostring(player.UserId),
+    })
+
+    local requestOK, response = pcall(function()
+        return requestFn({
+            Url = LOCOPANI_ACTIVATE_URL,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json",
+            },
+            Body = requestBody,
+        })
+    end)
+
+    if not requestOK or type(response) ~= "table" then
+        return false, "Não foi possível contactar o servidor de ativação."
+    end
+
+    local statusCode = tonumber(response.StatusCode or response.Status or 0) or 0
+    local body = response.Body
+    if statusCode < 200 or statusCode >= 300 or type(body) ~= "string" then
+        return false, "Erro no servidor de ativação (HTTP " .. tostring(statusCode) .. ")."
+    end
+
+    local decodeOK, data = pcall(function()
+        return HttpService:JSONDecode(body)
+    end)
+    if not decodeOK or type(data) ~= "table" then
+        return false, "O servidor devolveu uma resposta inválida."
+    end
+
+    -- A Edge Function responde com { status = "...", authorized = true/false }.
+    if data.authorized == true and
+        (data.status == "ACTIVATED" or data.status == "ALREADY_LINKED") then
+        if data.status == "ALREADY_LINKED" then
+            return true, "Esta chave já está vinculada à tua conta."
+        end
+        return true, "Chave ativada com sucesso."
+    end
+
+    local messages = {
+        INVALID_INPUT = "Os dados enviados são inválidos.",
+        INVALID_KEY = "Chave inválida.",
+        KEY_ALREADY_CLAIMED = "Esta chave já pertence a outro jogador.",
+        USER_ALREADY_HAS_KEY = "Este jogador já tem uma chave vinculada.",
+        INTERNAL_ERROR = "Erro interno ao validar a chave.",
+        SERVER_CONFIG_ERROR = "A configuração do servidor está incompleta.",
+        INVALID_REQUEST = "Pedido de ativação inválido.",
+    }
+    return false, messages[data.status] or
+        ("Ativação recusada: " .. tostring(data.status or "resposta desconhecida"))
+end
 
 local function LOCOPANI_ShowKeyGate()
     local Players = game:GetService("Players")
@@ -282,8 +349,24 @@ local function LOCOPANI_ShowKeyGate()
     verify.MouseButton1Click:Connect(function()
         if busy then return end
         busy = true
+
         local entered = string.upper(string.gsub(input.Text, "%s+", ""))
-        if LOCOPANI_VALID_KEYS[entered] then
+        if entered == "" then
+            status.Text = "Digite sua chave de acesso."
+            status.TextColor3 = COLORS.Red
+            statusDot.BackgroundColor3 = COLORS.Red
+            busy = false
+            return
+        end
+
+        status.Text = "Verificando key no Supabase..."
+        status.TextColor3 = COLORS.Muted
+        statusDot.BackgroundColor3 = COLORS.Muted
+        verify.Text = "VERIFICANDO..."
+        verify.BackgroundColor3 = COLORS.PurpleDark
+
+        local valid, message = LOCOPANI_ActivateKey(entered)
+        if valid then
             accepted = true
             status.Text = "Chave validada. Iniciando LOCOPANI..."
             status.TextColor3 = COLORS.Green
@@ -298,10 +381,12 @@ local function LOCOPANI_ShowKeyGate()
             gui:Destroy()
             if blur and blur.Parent then blur:Destroy() end
         else
-            status.Text = "Chave inválida. Confira o código e tente novamente."
+            status.Text = tostring(message or "Key inválida ou já vinculada a outro jogador.")
             status.TextColor3 = COLORS.Red
             statusDot.BackgroundColor3 = COLORS.Red
             inputStroke.Color = COLORS.Red
+            verify.Text = "VERIFICAR ACESSO   →"
+            verify.BackgroundColor3 = COLORS.Purple
             tween(panel, { Position = UDim2.fromScale(0.505, 0.5) }, 0.05)
             task.wait(0.06)
             tween(panel, { Position = UDim2.fromScale(0.5, 0.5) }, 0.12)
