@@ -76,6 +76,7 @@ local function LOCOPANI_ActivateKey(key)
         INVALID_KEY = "Chave inválida.",
         KEY_ALREADY_CLAIMED = "Esta chave já pertence a outro jogador.",
         USER_ALREADY_HAS_KEY = "Este jogador já tem uma chave vinculada.",
+        EXPIRED_KEY = "Esta key expirou. Solicita uma nova key ao administrador.",
         INTERNAL_ERROR = "Erro interno ao validar a chave.",
         SERVER_CONFIG_ERROR = "A configuração do servidor está incompleta.",
         INVALID_REQUEST = "Pedido de ativação inválido.",
@@ -85,317 +86,78 @@ local function LOCOPANI_ActivateKey(key)
 end
 
 local function LOCOPANI_ShowKeyGate()
-    local Players = game:GetService("Players")
-    local TweenService = game:GetService("TweenService")
-    local UserInputService = game:GetService("UserInputService")
-    local player = Players.LocalPlayer
-    local playerGui = player:WaitForChild("PlayerGui")
-
-    local COLORS = {
-        Background = Color3.fromRGB(0, 0, 0),
-        Panel = Color3.fromRGB(10, 10, 10),
-        Raised = Color3.fromRGB(20, 20, 20),
-        Border = Color3.fromRGB(65, 65, 65),
-        Purple = Color3.fromRGB(245, 245, 245), -- accent monochrome
-        PurpleDark = Color3.fromRGB(105, 105, 105),
-        Text = Color3.fromRGB(250, 250, 250),
-        Muted = Color3.fromRGB(155, 155, 155),
-        Green = Color3.fromRGB(220, 220, 220),
-        Red = Color3.fromRGB(180, 180, 180),
-    }
-
-    local gui = Instance.new("ScreenGui")
-    gui.Name = "LOCOPANI_KeyGate"
-    gui.ResetOnSpawn = false
-    gui.IgnoreGuiInset = true
-    gui.DisplayOrder = 999999
-
-    local okCore = pcall(function()
-        gui.Parent = game:GetService("CoreGui")
-    end)
-    if not okCore or not gui.Parent then
-        gui.Parent = playerGui
-    end
-
-    -- BlurEffect desfoca o mundo do jogo por trás da janela.
-    local Lighting = game:GetService("Lighting")
-    local oldBlur = Lighting:FindFirstChild("LOCOPANI_KeyBlur")
-    if oldBlur then oldBlur:Destroy() end
-    local blur = Instance.new("BlurEffect")
-    blur.Name = "LOCOPANI_KeyBlur"
-    blur.Size = 18
-    blur.Parent = Lighting
-
-    local shade = Instance.new("Frame")
-    shade.Name = "Overlay"
-    shade.Size = UDim2.fromScale(1, 1)
-    shade.BackgroundColor3 = COLORS.Background
-    shade.BackgroundTransparency = 0.38
-    shade.BorderSizePixel = 0
-    shade.Parent = gui
-
-    local panel = Instance.new("Frame")
-    panel.Name = "KeyPanel"
-    panel.AnchorPoint = Vector2.new(0.5, 0.5)
-    panel.Position = UDim2.fromScale(0.5, 0.5)
-    panel.Size = UDim2.fromOffset(560, 300)
-    panel.BackgroundColor3 = COLORS.Panel
-    panel.BorderSizePixel = 0
-    panel.ClipsDescendants = true
-    panel.Parent = shade
-
-    local panelScale = Instance.new("UIScale")
-    panelScale.Scale = 0.94
-    panelScale.Parent = panel
-
-    local panelCorner = Instance.new("UICorner")
-    panelCorner.CornerRadius = UDim.new(0, 5)
-    panelCorner.Parent = panel
-
-    local panelStroke = Instance.new("UIStroke")
-    panelStroke.Color = COLORS.Border
-    panelStroke.Thickness = 1
-    panelStroke.Parent = panel
-
-    local panelGradient = Instance.new("UIGradient")
-    panelGradient.Rotation = 90
-    panelGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(24, 24, 24)),
-        ColorSequenceKeypoint.new(1, COLORS.Panel),
-    })
-    panelGradient.Parent = panel
-
-    local accentBar = Instance.new("Frame")
-    accentBar.Name = "AccentBar"
-    accentBar.Size = UDim2.new(1, 0, 0, 3)
-    accentBar.BackgroundColor3 = COLORS.Purple
-    accentBar.BorderSizePixel = 0
-    accentBar.Parent = panel
-
-    local accentGradient = Instance.new("UIGradient")
-    accentGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(100, 100, 100)),
-        ColorSequenceKeypoint.new(0.5, COLORS.Purple),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(190, 190, 190)),
-    })
-    accentGradient.Parent = accentBar
-
-    local logo = Instance.new("Frame")
-    logo.Position = UDim2.fromOffset(24, 23)
-    logo.Size = UDim2.fromOffset(42, 42)
-    logo.BackgroundColor3 = Color3.fromRGB(28, 28, 28)
-    logo.BorderSizePixel = 0
-    logo.Parent = panel
-    Instance.new("UICorner", logo).CornerRadius = UDim.new(0, 11)
-    local logoStroke = Instance.new("UIStroke")
-    logoStroke.Color = COLORS.PurpleDark
-    logoStroke.Transparency = 0.25
-    logoStroke.Parent = logo
-
-    local logoText = Instance.new("TextLabel")
-    logoText.Size = UDim2.fromScale(1, 1)
-    logoText.BackgroundTransparency = 1
-    logoText.Font = Enum.Font.GothamBlack
-    logoText.Text = "L"
-    logoText.TextColor3 = COLORS.Text
-    logoText.TextSize = 25
-    logoText.Parent = logo
-
-    local title = Instance.new("TextLabel")
-    title.BackgroundTransparency = 1
-    title.Position = UDim2.fromOffset(78, 23)
-    title.Size = UDim2.new(1, -102, 0, 25)
-    title.Font = Enum.Font.GothamBold
-    title.Text = "LOCOPANI"
-    title.TextColor3 = COLORS.Text
-    title.TextSize = 19
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = panel
-
-    local subtitle = Instance.new("TextLabel")
-    subtitle.BackgroundTransparency = 1
-    subtitle.Position = UDim2.fromOffset(79, 49)
-    subtitle.Size = UDim2.new(1, -104, 0, 18)
-    subtitle.Font = Enum.Font.GothamMedium
-    subtitle.Text = "SISTEMA DE AUTENTICAÇÃO"
-    subtitle.TextColor3 = COLORS.Muted
-    subtitle.TextSize = 10
-    subtitle.TextXAlignment = Enum.TextXAlignment.Left
-    subtitle.Parent = panel
-
-    local divider = Instance.new("Frame")
-    divider.Position = UDim2.fromOffset(24, 81)
-    divider.Size = UDim2.new(1, -48, 0, 1)
-    divider.BackgroundColor3 = COLORS.Border
-    divider.BorderSizePixel = 0
-    divider.Parent = panel
-
-    local instruction = Instance.new("TextLabel")
-    instruction.BackgroundTransparency = 1
-    instruction.Position = UDim2.fromOffset(24, 96)
-    instruction.Size = UDim2.new(1, -48, 0, 20)
-    instruction.Font = Enum.Font.GothamMedium
-    instruction.Text = "Digite sua chave de acesso"
-    instruction.TextColor3 = COLORS.Text
-    instruction.TextSize = 13
-    instruction.TextXAlignment = Enum.TextXAlignment.Left
-    instruction.Parent = panel
-
-    local input = Instance.new("TextBox")
-    input.Name = "KeyInput"
-    input.Position = UDim2.fromOffset(24, 124)
-    input.Size = UDim2.new(1, -48, 0, 43)
-    input.BackgroundColor3 = COLORS.Raised
-    input.BorderSizePixel = 0
-    input.ClearTextOnFocus = false
-    input.Font = Enum.Font.GothamMedium
-    input.PlaceholderText = "LOCO-XXXX-XXXX"
-    input.PlaceholderColor3 = COLORS.Muted
-    input.Text = ""
-    input.TextColor3 = COLORS.Text
-    input.TextSize = 14
-    input.TextXAlignment = Enum.TextXAlignment.Left
-    input.Parent = panel
-    Instance.new("UICorner", input).CornerRadius = UDim.new(0, 8)
-    local inputPadding = Instance.new("UIPadding")
-    inputPadding.PaddingLeft = UDim.new(0, 13)
-    inputPadding.PaddingRight = UDim.new(0, 13)
-    inputPadding.Parent = input
-    local inputStroke = Instance.new("UIStroke")
-    inputStroke.Color = COLORS.Border
-    inputStroke.Thickness = 1
-    inputStroke.Parent = input
-
-    local verify = Instance.new("TextButton")
-    verify.Name = "VerifyKey"
-    verify.Position = UDim2.fromOffset(24, 181)
-    verify.Size = UDim2.new(1, -48, 0, 40)
-    verify.BackgroundColor3 = COLORS.Purple
-    verify.BorderSizePixel = 0
-    verify.AutoButtonColor = false
-    verify.Font = Enum.Font.GothamBold
-    verify.Text = "VERIFICAR ACESSO   →"
-    verify.TextColor3 = Color3.fromRGB(10, 10, 10)
-    verify.TextSize = 12
-    verify.Parent = panel
-    Instance.new("UICorner", verify).CornerRadius = UDim.new(0, 8)
-
-    local statusDot = Instance.new("Frame")
-    statusDot.Position = UDim2.fromOffset(26, 240)
-    statusDot.Size = UDim2.fromOffset(7, 7)
-    statusDot.BackgroundColor3 = COLORS.Muted
-    statusDot.BorderSizePixel = 0
-    statusDot.Parent = panel
-    Instance.new("UICorner", statusDot).CornerRadius = UDim.new(1, 0)
-
-    local status = Instance.new("TextLabel")
-    status.BackgroundTransparency = 1
-    status.Position = UDim2.fromOffset(40, 233)
-    status.Size = UDim2.new(1, -64, 0, 22)
-    status.Font = Enum.Font.Gotham
-    status.Text = "Aguardando validação da chave..."
-    status.TextColor3 = COLORS.Muted
-    status.TextSize = 11
-    status.TextXAlignment = Enum.TextXAlignment.Left
-    status.TextTruncate = Enum.TextTruncate.AtEnd
-    status.Parent = panel
-
-    local footer = Instance.new("TextLabel")
-    footer.BackgroundTransparency = 1
-    footer.AnchorPoint = Vector2.new(0.5, 1)
-    footer.Position = UDim2.new(0.5, 0, 1, -8)
-    footer.Size = UDim2.new(1, -24, 0, 12)
-    footer.Font = Enum.Font.Gotham
-    footer.Text = "LOCOPANI  •  ACCESS CONTROL"
-    footer.TextColor3 = Color3.fromRGB(91, 84, 105)
-    footer.TextSize = 9
-    footer.Parent = panel
-
-    local function tween(object, properties, duration)
-        TweenService:Create(object, TweenInfo.new(duration or 0.18, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), properties):Play()
-    end
-
-    local function refit()
-        local camera = workspace.CurrentCamera
-        local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
-        panelScale.Scale = math.clamp(math.min((viewport.X - 24) / 560, (viewport.Y - 24) / 300, 1), 0.65, 1)
-    end
-    refit()
-    if workspace.CurrentCamera then
-        workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(refit)
-    end
-    local targetScale = panelScale.Scale
-    panelScale.Scale = targetScale * 0.94
-
-    input.Focused:Connect(function()
-        tween(inputStroke, { Color = COLORS.Purple, Thickness = 1.5 })
-    end)
-    input.FocusLost:Connect(function(enterPressed)
-        tween(inputStroke, { Color = COLORS.Border, Thickness = 1 })
-        if enterPressed then
-            verify:Activate()
-        end
-    end)
-
-    verify.MouseEnter:Connect(function()
-        tween(verify, { BackgroundColor3 = Color3.fromRGB(255, 255, 255) })
-    end)
-    verify.MouseLeave:Connect(function()
-        tween(verify, { BackgroundColor3 = COLORS.Purple })
-    end)
-
+    local enteredKey = ""
     local accepted = false
     local busy = false
-    verify.MouseButton1Click:Connect(function()
-        if busy then return end
-        busy = true
+    local statusText = nil
+    local statusLabel = nil
 
-        local entered = string.upper(string.gsub(input.Text, "%s+", ""))
-        if entered == "" then
-            status.Text = "Digite sua chave de acesso."
-            status.TextColor3 = COLORS.Red
-            statusDot.BackgroundColor3 = COLORS.Red
-            busy = false
-            return
-        end
+    -- A interface do sistema de key usa Rayfield Gen2; a lógica de ativação Supabase permanece igual.
+    local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
+    local keyWindow = Rayfield:CreateWindow({
+        name = "LOCOPANI KEY SYSTEM",
+        subtitle = "Rayfield Gen2",
+        sidebarLayout = true,
+        theme = "cobalt",
+    })
 
-        status.Text = "Verificando key no Supabase..."
-        status.TextColor3 = COLORS.Muted
-        statusDot.BackgroundColor3 = COLORS.Muted
-        verify.Text = "VERIFICANDO..."
-        verify.BackgroundColor3 = COLORS.PurpleDark
+    local keyTab = keyWindow:CreateTab({ name = "Key System" })
+    keyTab:CreateInput({
+        name = "Access key",
+        placeholder = "LOCO-XXXX-XXXX",
+        callback = function(value)
+            enteredKey = tostring(value or "")
+        end,
+    })
+    statusText = keyTab:CreateText({ name = "Digite sua chave de acesso e clique em Validar key." })
 
-        local valid, message = LOCOPANI_ActivateKey(entered)
-        if valid then
-            accepted = true
-            status.Text = "Chave validada. Iniciando LOCOPANI..."
-            status.TextColor3 = COLORS.Green
-            statusDot.BackgroundColor3 = COLORS.Green
-            verify.Text = "ACESSO LIBERADO  ✓"
-            verify.BackgroundColor3 = COLORS.Green
-            inputStroke.Color = COLORS.Green
-            task.wait(0.45)
-            tween(panelScale, { Scale = panelScale.Scale * 0.96 }, 0.16)
-            tween(shade, { BackgroundTransparency = 1 }, 0.2)
-            task.wait(0.18)
-            gui:Destroy()
-            if blur and blur.Parent then blur:Destroy() end
-        else
-            status.Text = tostring(message or "Key inválida ou já vinculada a outro jogador.")
-            status.TextColor3 = COLORS.Red
-            statusDot.BackgroundColor3 = COLORS.Red
-            inputStroke.Color = COLORS.Red
-            verify.Text = "VERIFICAR ACESSO   →"
-            verify.BackgroundColor3 = COLORS.Purple
-            tween(panel, { Position = UDim2.fromScale(0.505, 0.5) }, 0.05)
-            task.wait(0.06)
-            tween(panel, { Position = UDim2.fromScale(0.5, 0.5) }, 0.12)
-            busy = false
-        end
-    end)
+    keyTab:CreateButton({
+        name = "Validar key",
+        callback = function()
+            if busy or accepted then return end
+            busy = true
 
-    tween(panelScale, { Scale = targetScale }, 0.22)
-    while not accepted and gui.Parent do
+            local entered = string.upper(string.gsub(enteredKey, "%s+", ""))
+            if entered == "" then
+                if statusText and statusText.Set then
+                    pcall(function() statusText:Set("Digite sua chave de acesso.") end)
+                end
+                busy = false
+                return
+            end
+
+            if statusText and statusText.Set then
+                pcall(function() statusText:Set("Verificando key no Supabase...") end)
+            end
+
+            local valid, message = LOCOPANI_ActivateKey(entered)
+            if valid then
+                accepted = true
+                if statusText and statusText.Set then
+                    pcall(function() statusText:Set("Chave validada. Iniciando LOCOPANI...") end)
+                end
+                task.wait(0.35)
+                pcall(function()
+                    if keyWindow.Unload then
+                        keyWindow:Unload()
+                    elseif keyWindow.Destroy then
+                        keyWindow:Destroy()
+                    elseif keyWindow.SetVisibility then
+                        keyWindow:SetVisibility(false)
+                    elseif keyWindow.SetVisible then
+                        keyWindow:SetVisible(false)
+                    end
+                end)
+            else
+                if statusText and statusText.Set then
+                    pcall(function() statusText:Set(tostring(message or "Key inválida ou já vinculada a outro jogador.")) end)
+                end
+                busy = false
+            end
+        end,
+    })
+
+    while not accepted do
         task.wait(0.1)
     end
     return accepted
