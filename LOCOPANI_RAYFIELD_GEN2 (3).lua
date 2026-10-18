@@ -2901,6 +2901,10 @@ local function f45()
 end
 
 function f44(p120)
+  -- Quando o Custom Protect estiver ativo, deixe a legenda usar o nome personalizado.
+  if _G.CustomProtect and _G.CustomProtect.Enabled then
+    return
+  end
   if not v232.Enabled then
     return
   elseif not p120 then
@@ -2934,6 +2938,10 @@ function f44(p120)
 end
 
 local function f46()
+  -- O protetor antigo não deve sobrescrever o nome personalizado do Custom Protect.
+  if _G.CustomProtect and _G.CustomProtect.Enabled then
+    return
+  end
   if not v232.Enabled then
     return
   else
@@ -8317,7 +8325,7 @@ local function LOCOPANI_RayControl(kind, tab, name, cfg, callback)
     for _, fn in ipairs(handle._callbacks) do task.spawn(fn, value) end
   end
   local h
-  local common = { name = title, description = cfg.Tooltip }
+  local common = { name = title }
   if kind == "Toggle" then
     common.value = cfg.Default == true
     common.callback = onValue
