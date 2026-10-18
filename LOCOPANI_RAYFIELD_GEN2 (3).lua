@@ -3526,39 +3526,101 @@ function f55()
 end
 
 local connect2
+local playerCardGuiConn
+local playerCardInterfaceConn
+local playerCardPersistentConn
+local playerCardPending = false
 
 local function f57()
   if connect2 then
     connect2:Disconnect()
     connect2 = nil
   end
-
+  if playerCardGuiConn then
+    playerCardGuiConn:Disconnect()
+    playerCardGuiConn = nil
+  end
+  if playerCardInterfaceConn then
+    playerCardInterfaceConn:Disconnect()
+    playerCardInterfaceConn = nil
+  end
+  if playerCardPersistentConn then
+    playerCardPersistentConn:Disconnect()
+    playerCardPersistentConn = nil
+  end
+  playerCardPending = false
   v228.__cardFiredFor = nil
   v208 = false
   v209 = false
 end
 
 local function f58()
-  if connect2 then
-    return
-  else
-    local Interface_6 = localPlayer2.PlayerGui:FindFirstChild("Interface")
-
-    if Interface_6 then
-      local Persistent_4 = Interface_6:FindFirstChild("Persistent")
-
-      if Persistent_4 then
-        connect2 = Persistent_4.ChildAdded:Connect(function(child5)
-          if child5.Name == "FlashPlayerCardFrame" then
-            task.wait(0.1)
-            f56()
-          end
-        end)
-      end
-    end
-
+  if connect2 or playerCardGuiConn then
     return
   end
+
+  local function attachPersistent(persistent)
+    if not persistent or not persistent:IsA("Instance") then return end
+    if connect2 and playerCardPersistentConn == persistent then return end
+    if connect2 then
+      connect2:Disconnect()
+      connect2 = nil
+    end
+    playerCardPersistentConn = persistent
+
+    local function onCardAdded(child5)
+      if child5.Name ~= "FlashPlayerCardFrame" or playerCardPending then return end
+      playerCardPending = true
+      task.spawn(function()
+        -- The game sometimes adds the card frame before its Username label is ready.
+        for attempt = 1, 12 do
+          if not child5.Parent then break end
+          local username = child5:FindFirstChild("Username", true)
+          if username and username:IsA("TextLabel") and username.Text ~= "" then
+            break
+          end
+          task.wait(0.05)
+        end
+        if child5.Parent then
+          f56()
+        end
+        playerCardPending = false
+      end)
+    end
+
+    connect2 = persistent.ChildAdded:Connect(onCardAdded)
+    -- Handle a card that appeared just before the listener was attached.
+    for _, existingCard in ipairs(persistent:GetChildren()) do
+      if existingCard.Name == "FlashPlayerCardFrame" then
+        onCardAdded(existingCard)
+      end
+    end
+  end
+
+  local function attachInterface(interface)
+    if not interface then return end
+    local persistent = interface:FindFirstChild("Persistent")
+    if persistent then attachPersistent(persistent) end
+
+    if playerCardInterfaceConn then
+      playerCardInterfaceConn:Disconnect()
+      playerCardInterfaceConn = nil
+    end
+    playerCardInterfaceConn = interface.ChildAdded:Connect(function(child)
+      if child.Name == "Persistent" then attachPersistent(child) end
+    end)
+  end
+
+  local playerGui = localPlayer2:FindFirstChildOfClass("PlayerGui") or localPlayer2:WaitForChild("PlayerGui", 10)
+  if not playerGui then return end
+
+  local interface = playerGui:FindFirstChild("Interface")
+  if interface then attachInterface(interface) end
+
+  -- The interface can load after the toggle is enabled, so keep watching for it.
+  playerCardGuiConn = playerGui.ChildAdded:Connect(function(child)
+    if child.Name == "Interface" then attachInterface(child) end
+  end)
 end
 
 _G.PlayerCard = {
@@ -8160,6 +8222,34 @@ LOCOPANI_RAY_WINDOW = Rayfield:CreateWindow({
   sidebarLayout = true,
 })
 
+-- Corrige falhas raras de cálculo de layout no primeiro carregamento (texto estreito/empilhado).
+-- Reaplica o texto após a interface terminar de montar e recalcula os TextLabels envolvidos.
+task.spawn(function()
+  local RunService = game:GetService("RunService")
+  for _, delayFrames in ipairs({1, 3, 8}) do
+    for _ = 1, delayFrames do RunService.Heartbeat:Wait() end
+    pcall(function()
+      local containers = {game:GetService("CoreGui"), game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")}
+      for _, container in ipairs(containers) do
+        if container then
+          for _, gui in ipairs(container:GetChildren()) do
+            if gui:IsA("ScreenGui") and (gui.Name:lower():find("rayfield") or gui.Name:lower():find("sirius")) then
+              for _, obj in ipairs(gui:GetDescendants()) do
+                if obj:IsA("TextLabel") and obj.Visible and obj.Text ~= "" and obj.TextWrapped then
+                  local oldText = obj.Text
+                  obj.Text = " "
+                  RunService.Heartbeat:Wait()
+                  if obj.Parent then obj.Text = oldText end
+                end
+              end
+            end
+          end
+        end
+      end
+    end)
+  end
+end)
+
 -- Main menu visibility key: RightShift. Handle it directly against the Gen2 window.
 local UserInputService = game:GetService("UserInputService")
 local function LOCOPANI_SetRayfieldVisibility(visible)
@@ -8275,8 +8365,23 @@ local function LOCOPANI_RayControl(kind, tab, name, cfg, callback)
   end
   function handle:GetValue() return self.Value end
   function handle:SetValues(values)
-    self.Values = values
-    if self._control and self._control.SetOptions then pcall(function() self._control:SetOptions(values) end) end
+    self.Values = values or {}
+    local control = self._control
+    if not control then return end
+    -- Rayfield forks expose different names for updating dropdown options.
+    local updated = false
+    for _, methodName in ipairs({"SetOptions", "Refresh", "SetValues", "UpdateOptions"}) do
+      local method = control[methodName]
+      if type(method) == "function" then
+        local ok = pcall(method, control, self.Values)
+        if ok then updated = true; break end
+      end
+    end
+    -- Keep common internal option fields in sync for forks that read these directly.
+    pcall(function() control.Options = self.Values end)
+    pcall(function() control.options = self.Values end)
+    pcall(function() control.Values = self.Values end)
+    return updated
   end
   function handle:OnChanged(fn) table.insert(self._callbacks, fn); return self end
   function handle:SetText(value)
@@ -9622,6 +9727,272 @@ do
   AddLeftGroupbox:AddButton("Unload", function() v174:Unload() end)
 
   v174.ToggleKeybind = options.MenuKeybind
+end
+
+
+-- LOCOPANI CONFIG UI (Rayfield Gen2)
+do
+  pcall(function() v174:SetConfigFolder("LOCOPANI") end)
+  local configTab = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Configs" })
+  local configName = ""
+  local selectedConfig = nil
+  local configStatus
+  local configDropdown
+  local configNames = {}
+
+  configTab:CreateInput({
+    name = "Nome para salvar",
+    placeholder = "Digite um nome para salvar",
+    callback = function(value)
+      configName = tostring(value or "")
+    end,
+  })
+
+  local function setConfigStatus(message)
+    if configStatus and configStatus.Set then
+      pcall(function() configStatus:Set(message) end)
+    end
+    pcall(function() v174:Notify(message) end)
+  end
+
+  local function cleanConfigName(name)
+    name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    name = name:gsub("[^%w_%-]", "_")
+    if #name > 48 then name = name:sub(1, 48) end
+    return name
+  end
+
+  local function refreshConfigList()
+    local found = {}
+    -- Use the same config manager as SaveConfig/LoadConfig, so the dropdown
+    -- reads exactly the folder the script is configured to use.
+    local ok, files = pcall(function() return v174:ListConfigs() end)
+    if ok and type(files) == "table" then
+      for _, item in ipairs(files) do
+        local name = tostring(item):match("([^/\\]+)%.json$") or tostring(item)
+        name = name:gsub("%.json$", "")
+        if name ~= "" then found[name] = true end
+      end
+    end
+
+    configNames = {}
+    for name in pairs(found) do table.insert(configNames, name) end
+    table.sort(configNames, function(a, b) return string.lower(a) < string.lower(b) end)
+
+    if configDropdown and configDropdown.SetValues then
+      configDropdown:SetValues(configNames)
+    end
+
+    if selectedConfig and not found[selectedConfig] then selectedConfig = nil end
+    return configNames
+  end
+
+  -- Use the Gen2 wrapper so the dropdown can refresh through SetValues.
+  configDropdown = LOCOPANI_RayControl("Dropdown", configTab, "Configurações", {
+    Values = {},
+    Default = nil,
+    Placeholder = "Selecione uma configuração",
+  }, function(selected)
+    if type(selected) == "table" then selected = selected[1] end
+    if type(selected) == "string" and selected ~= "" then
+      selectedConfig = selected
+      configName = selected
+    end
+  end)
+
+  local function getConfigTarget()
+    if tostring(configName or ""):gsub("%s+", "") ~= "" then
+      return cleanConfigName(configName)
+    end
+    return cleanConfigName(selectedConfig)
+  end
+
+  configTab:CreateButton({
+    name = "Atualizar lista",
+    callback = function()
+      refreshConfigList()
+      setConfigStatus("Lista de configurações atualizada.")
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Salvar configuração",
+    callback = function()
+      local name = cleanConfigName(configName)
+      if name == "" then
+        setConfigStatus("Digite um nome para a nova configuração.")
+        return
+      end
+      local saveCallOk, saveResult = pcall(function() return v174:SaveConfig(name) end)
+      if saveCallOk and saveResult == true then
+        selectedConfig = name
+        refreshConfigList()
+        if configDropdown and configDropdown.Set then
+          pcall(function() configDropdown:Set(name) end)
+        elseif configDropdown and configDropdown._control and configDropdown._control.Set then
+          pcall(function() configDropdown._control:Set(name) end)
+        end
+        setConfigStatus("Configuração salva: " .. name)
+      else
+        setConfigStatus("Não foi possível salvar. Verifique se o executor suporta arquivos.")
+      end
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Carregar selecionada",
+    callback = function()
+      local name = getConfigTarget()
+      if name == "" then
+        setConfigStatus("Selecione uma configuração na lista ou digite um nome.")
+        return
+      end
+      if v174:LoadConfig(name) then
+        selectedConfig = name
+        setConfigStatus("Configuração carregada: " .. name)
+      else
+        setConfigStatus("Configuração não encontrada ou arquivo indisponível: " .. name)
+      end
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Excluir configuração selecionada",
+    callback = function()
+      -- Exclusão baseada somente na seleção do dropdown, nunca no texto digitado.
+      local name = cleanConfigName(selectedConfig)
+      if name == "" then
+        setConfigStatus("Selecione no menu a configuração que deseja excluir.")
+        return
+      end
+
+      local env = (type(getgenv) == "function" and getgenv()) or _G
+      local isfileFn = env.isfile or isfile
+      local deleteFn = env.delfile or delfile
+      local path = "LOCOPANI/configs/" .. name .. ".json"
+      if type(deleteFn) ~= "function" then
+        setConfigStatus("Este executor não suporta excluir arquivos (delfile).")
+        return
+      end
+
+      local exists = false
+      if type(isfileFn) == "function" then
+        local okExists, result = pcall(isfileFn, path)
+        exists = okExists and result == true
+      else
+        local listFn = env.listfiles or listfiles
+        if type(listFn) == "function" then
+          local okList, files = pcall(listFn, "LOCOPANI/configs")
+          if okList and type(files) == "table" then
+            for _, filePath in ipairs(files) do
+              local base = tostring(filePath):match("([^/\\]+)%.json$")
+              if base == name then exists = true break end
+            end
+          end
+        end
+      end
+      if not exists then
+        setConfigStatus("A configuração selecionada não foi encontrada.")
+        refreshConfigList()
+        return
+      end
+
+      local okDelete, deleteErr = pcall(deleteFn, path)
+      if not okDelete then
+        setConfigStatus("Falha ao excluir a configuração: " .. tostring(deleteErr))
+        return
+      end
+
+      -- Remove o autoload caso ele aponte para a configuração excluída.
+      local readFn = env.readfile or readfile
+      local writeFn = env.writefile or writefile
+      if type(readFn) == "function" and type(writeFn) == "function" then
+        local okRead, autoName = pcall(readFn, "LOCOPANI/autoload.txt")
+        if okRead and tostring(autoName or ""):gsub("^%s+", ""):gsub("%s+$", "") == name then
+          pcall(writeFn, "LOCOPANI/autoload.txt", "")
+        end
+      end
+
+      selectedConfig = nil
+      configName = ""
+      refreshConfigList()
+      setConfigStatus("Configuração excluída: " .. name)
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Ativar autoload",
+    callback = function()
+      local name = getConfigTarget()
+      if name == "" then
+        setConfigStatus("Selecione uma configuração na lista primeiro.")
+        return
+      end
+      local env = (type(getgenv) == "function" and getgenv()) or _G
+      local writeFn = env.writefile or writefile
+      if type(writeFn) ~= "function" then
+        setConfigStatus("Este executor não suporta salvar arquivos.")
+        return
+      end
+      local env2 = (type(getgenv) == "function" and getgenv()) or _G
+      local isfileFn = env2.isfile or isfile
+      local exists = false
+      if type(isfileFn) == "function" then
+        local okExists, result = pcall(isfileFn, "LOCOPANI/configs/" .. name .. ".json")
+        exists = okExists and result == true
+      else
+        local listFn = env2.listfiles or listfiles
+        if type(listFn) == "function" then
+          local okList, files = pcall(listFn, "LOCOPANI/configs")
+          if okList and type(files) == "table" then
+            for _, filePath in ipairs(files) do
+              if tostring(filePath):match("([^/\\\\]+)%.json$") == name then
+                exists = true
+                break
+              end
+            end
+          end
+        end
+      end
+      if not exists then
+        setConfigStatus("Essa configuração ainda não existe. Salve-a primeiro.")
+        return
+      end
+      pcall(function()
+        local mk = env.makefolder or makefolder
+        if type(mk) == "function" then
+          pcall(mk, "LOCOPANI")
+          pcall(mk, "LOCOPANI/configs")
+        end
+      end)
+      local ok = pcall(writeFn, "LOCOPANI/autoload.txt", name)
+      if ok then
+        setConfigStatus("Autoload ativado: " .. name)
+      else
+        setConfigStatus("Não foi possível definir o autoload.")
+      end
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Desativar autoload",
+    callback = function()
+      local env = (type(getgenv) == "function" and getgenv()) or _G
+      local writeFn = env.writefile or writefile
+      if type(writeFn) ~= "function" then
+        setConfigStatus("Este executor não suporta arquivos.")
+        return
+      end
+      local ok = pcall(writeFn, "LOCOPANI/autoload.txt", "")
+      if ok then
+        setConfigStatus("Autoload desativado.")
+      else
+        setConfigStatus("Não foi possível desativar o autoload.")
+      end
+    end,
+  })
+
+  refreshConfigList()
 end
 
 do
