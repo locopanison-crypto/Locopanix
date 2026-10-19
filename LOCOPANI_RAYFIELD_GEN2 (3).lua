@@ -149,6 +149,34 @@ local function LOCOPANI_ShowKeyGate()
             enteredKey = tostring(value or "")
         end,
     })
+
+    keyTab:CreateButton({
+        name = "PEGAR ID ROBLOX",
+        callback = function()
+            local player = game:GetService("Players").LocalPlayer
+            local userId = tostring(player.UserId)
+            local env = (type(getgenv) == "function" and getgenv()) or _G
+            local clipboardFn = env.setclipboard or env.toclipboard
+                or env.set_clipboard or setclipboard or toclipboard
+
+            if type(clipboardFn) == "function" then
+                local copied = pcall(clipboardFn, userId)
+                if statusText and statusText.Set then
+                    pcall(function()
+                        statusText:Set(copied and
+                            ("ID do Roblox copiado: " .. userId) or
+                            "Não foi possível copiar. Copie seu ID manualmente: " .. userId)
+                    end)
+                end
+            elseif statusText and statusText.Set then
+                pcall(function()
+                    statusText:Set("Seu ID do Roblox: " .. userId ..
+                        " (este executor não oferece suporte à área de transferência)")
+                end)
+            end
+        end,
+    })
+
     statusText = keyTab:CreateText({ name = "Digite sua chave de acesso e clique em Validar key." })
 
     keyTab:CreateButton({
