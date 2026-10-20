@@ -2904,23 +2904,21 @@ local function f45()
 
     v232.NotifConn2 = Interface.DescendantAdded:Connect(function(descendant)
       if descendant:IsA("TextLabel") then
-        if not v232.Enabled then
-          return
-        else
-          if not localPlayer2 then
-            return
-          end
-
-          local text9 = descendant.Text or ""
-
-          if string.find(text9, localPlayer2.Name) then
-            descendant.Text = string.gsub(text9, localPlayer2.Name, v232.NameTag)
-          end
-
+        if not v232.Enabled or not localPlayer2 then
           return
         end
-      else
-        return
+
+        -- Nunca deixe o protetor antigo substituir o nome do Custom Protect.
+        if _G.CustomProtect and _G.CustomProtect.Enabled then
+          return
+        end
+
+        local text9 = descendant.Text or ""
+        if string.find(text9, localPlayer2.Name, 1, true) then
+          descendant.Text = string.gsub(text9, localPlayer2.Name, function()
+            return v232.NameTag
+          end)
+        end
       end
     end)
 
@@ -3148,35 +3146,84 @@ function v235.updateTitle()
   end
 end
 
-function v235.processNotification(p122)
-  if not v235.Enabled then
+v235.TextWatchers = v235.TextWatchers or {}
+
+function v235.replaceLegendName(label)
+  if not v235.Enabled or not localPlayer2 or not label
+    or not label:IsA("TextLabel") then
     return
-  elseif not p122 then
+  end
+
+  local text = label.Text or ""
+  local playerName = localPlayer2.Name
+  local customName = tostring(v235.Name or "CUSTOM NAME")
+  local oldProtectName = tostring(v232 and v232.NameTag or "LOCOPANI PROTECTION")
+
+  if text == "" then
     return
-  elseif not localPlayer2 then
+  end
+
+  -- O listener do protetor antigo pode ter trocado o nome primeiro.
+  -- Substituímos tanto o username real quanto o nome padrão antigo.
+  if playerName ~= "" and string.find(text, playerName, 1, true) then
+    text = string.gsub(text, playerName, function()
+      return customName
+    end)
+  end
+
+  if oldProtectName ~= "" and string.find(text, oldProtectName, 1, true) then
+    text = string.gsub(text, oldProtectName, function()
+      return customName
+    end)
+  end
+
+  -- Compatibilidade com textos já alterados para o nome padrão antigo.
+  if string.find(text, "LOCOPANI PROTECT", 1, true) then
+    text = string.gsub(text, "LOCOPANI PROTECT", function()
+      return customName
+    end)
+  end
+
+  if label.Text ~= text then
+    label.Text = text
+  end
+end
+
+function v235.watchLegendLabel(label)
+  if not label or not label:IsA("TextLabel") then
     return
-  else
-    local TextLabel_2 = p122:FindFirstChild("TextLabel")
+  end
 
-    if not TextLabel_2 then
-      for index31, value38 in ipairs(p122:GetDescendants()) do
-        if value38:IsA("TextLabel") then
-          TextLabel_2 = value38
-          break
-        end
-      end
-    end
+  -- Process immediately, and again whenever the game updates the label's text.
+  v235.replaceLegendName(label)
 
-    if not TextLabel_2 then
-      return
-    else
-      local text11 = TextLabel_2.Text or ""
+  if v235.TextWatchers[label] then
+    return
+  end
 
-      if string.find(text11, localPlayer2.Name) then
-        TextLabel_2.Text = string.gsub(text11, localPlayer2.Name, v235.Name)
-      end
+  local ok, connection = pcall(function()
+    return label:GetPropertyChangedSignal("Text"):Connect(function()
+      v235.replaceLegendName(label)
+    end)
+  end)
 
-      return
+  if ok and connection then
+    v235.TextWatchers[label] = connection
+  end
+end
+
+function v235.processNotification(item)
+  if not v235.Enabled or not item then
+    return
+  end
+
+  if item:IsA("TextLabel") then
+    v235.watchLegendLabel(item)
+  end
+
+  for _, descendant in ipairs(item:GetDescendants()) do
+    if descendant:IsA("TextLabel") then
+      v235.watchLegendLabel(descendant)
     end
   end
 end
@@ -3192,57 +3239,44 @@ function v235.setupNotifications()
     v235.NotifConn2 = nil
   end
 
-  if not v235.Enabled then
-    return
-  elseif not localPlayer2 then
-    return
-  else
-    local Interface_3 = localPlayer2.PlayerGui:FindFirstChild("Interface")
-
-    if Interface_3 then
-      Interface_3 = Interface_3:FindFirstChild("Persistent")
-
-      if Interface_3 then
-        Interface_3 = Interface_3:FindFirstChild("Notifications")
-      end
+  -- Remove text-change listeners from the previous interface.
+  for label, connection in pairs(v235.TextWatchers) do
+    if connection then
+      pcall(function() connection:Disconnect() end)
     end
+    v235.TextWatchers[label] = nil
+  end
 
-    if not Interface_3 then
+  if not v235.Enabled or not localPlayer2 then
+    return
+  end
+
+  local playerGui = localPlayer2:FindFirstChildOfClass("PlayerGui")
+  local interface = playerGui and playerGui:FindFirstChild("Interface")
+  if not interface then
+    return
+  end
+
+  -- Watch the whole Interface, not only Persistent/Notifications:
+  -- score announcements/legend labels may be created elsewhere.
+  v235.processNotification(interface)
+
+  v235.NotifConn = interface.DescendantAdded:Connect(function(descendant)
+    if not v235.Enabled then
       return
     end
 
-    for index32, value39 in ipairs(Interface_3:GetChildren()) do
-      v235.processNotification(value39)
+    if descendant:IsA("TextLabel") then
+      v235.watchLegendLabel(descendant)
+    else
+      v235.processNotification(descendant)
     end
+  end)
 
-    v235.NotifConn = Interface_3.ChildAdded:Connect(function(child3)
-      v235.processNotification(child3)
-    end)
-
-    v235.NotifConn2 = Interface_3.DescendantAdded:Connect(function(descendant2)
-      if descendant2:IsA("TextLabel") then
-        if not v235.Enabled then
-          return
-        else
-          if not localPlayer2 then
-            return
-          end
-
-          local text12 = descendant2.Text or ""
-
-          if string.find(text12, localPlayer2.Name) then
-            descendant2.Text = string.gsub(text12, localPlayer2.Name, v235.Name)
-          end
-
-          return
-        end
-      else
-        return
-      end
-    end)
-
-    return
-  end
+  -- Also catch labels directly parented to Interface.
+  v235.NotifConn2 = interface.ChildAdded:Connect(function(child)
+    v235.processNotification(child)
+  end)
 end
 
 function v235.protectPlayerCard()
@@ -3342,6 +3376,13 @@ function v235.toggle(p123)
     end
 
     v235.stopCardLoop()
+
+    for label, connection in pairs(v235.TextWatchers or {}) do
+      if connection then
+        pcall(function() connection:Disconnect() end)
+      end
+      v235.TextWatchers[label] = nil
+    end
 
     if localPlayer2.Character then
       local Nametag_4 = localPlayer2.Character:FindFirstChild("Nametag")
@@ -7371,30 +7412,40 @@ function v451.paint(p188, p189, p190)
 end
 
 function v451.setSlot(p191, p192)
-  local v474, v475 = pcall(require, replicatedStorage.Packages.Knit)
-  local v476
+  -- Visual-only equip: update the local Equipped store so the UI/game client
+  -- reacts to the selected cosmetic without claiming ownership on the server.
+  local okKnit, Knit = pcall(require, replicatedStorage.Packages.Knit)
+  if not okKnit or not Knit then return false end
 
-  if not v474 then
-    return
-  else
-    local v477
-    v477, v476 = pcall(v475.GetController, "InventoryController")
-
-    if not v477 or type(v476) ~= "table" or not v476.Equipped then
-      return
-    else
-      local v478, v479 = pcall(function() return v476.Equipped:get() end)
-
-      if not v478 or type(v479) ~= "table" then
-        return
-      end
-
-      for key16, value95 in pairs(v479) do
-      end
-
-      return
-    end
+  local okController, inventoryController = pcall(Knit.GetController, "InventoryController")
+  if not okController or type(inventoryController) ~= "table" or not inventoryController.Equipped then
+    return false
   end
+
+  local okEquipped, currentEquipped = pcall(function()
+    return inventoryController.Equipped:get()
+  end)
+  if not okEquipped or type(currentEquipped) ~= "table" then return false end
+
+  local updatedEquipped = {}
+  for key, value in pairs(currentEquipped) do
+    updatedEquipped[key] = value
+  end
+
+  if p192 == nil or p192 == false or p192 == "" then
+    updatedEquipped[p191] = nil
+  else
+    updatedEquipped[p191] = p192
+  end
+
+  local okSet = pcall(function()
+    inventoryController.Equipped:set(updatedEquipped)
+  end)
+  if not okSet then return false end
+
+  -- Keep v451.realEquipped unchanged: it stores the player's original items
+  -- so the visual spoof can be reverted cleanly when the toggle is disabled.
+  return true
 end
 
 function v451.currentSlot(p193)
@@ -8334,7 +8385,9 @@ pcall(function()
   if LOCOPANIHUBWindow.Instance then LOCOPANIHUBWindow.Instance.Visible = false end
 end)
 
+-- Updates e criada primeiro para aparecer como a primeira categoria da UI principal.
 local LOCOPANI_RAY_TABS = {
+  Updates = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Updates" }),
   Main = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Main" }),
   Character = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Character" }),
   Visuals = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Visuals" }),
@@ -8342,6 +8395,62 @@ local LOCOPANI_RAY_TABS = {
   GameJoin = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Game Join" }),
   ["UI Settings"] = LOCOPANI_RAY_WINDOW:CreateTab({ name = "UI Settings" }),
 }
+
+-- Changelog isolado em um bloco proprio para liberar registradores locais.
+do
+  local history = {
+    {
+      date = "20/10/2026",
+      title = "Update ocorrida",
+      changes = {
+        "Bug fixes",
+        "Level Changer",
+      },
+    },
+    {
+      date = "20/10/2026",
+      title = "ScoreEffect Changer",
+      changes = {
+        "Corrigido o equipamento visual local dos ScoreEffects.",
+        "Atualizado o estado local de equipamento para aplicar o efeito visual.",
+      },
+    },
+    {
+      date = "20/10/2026",
+      title = "Visual Level",
+      changes = {
+        "Corrigida a exibicao do nivel acima do personagem.",
+        "Melhorada a atualizacao do BillboardGui do personagem.",
+      },
+    },
+    {
+      date = "18/10/2026",
+      title = "Linkvertise Key System",
+      changes = {
+        "Corrigida a validacao de respostas JSON e texto simples do Linkvertise Anti-Bypass.",
+        "Respostas JSON validas com status true passaram a ser reconhecidas corretamente.",
+      },
+    },
+  }
+
+  -- Erros no conteudo do changelog nao devem impedir a inicializacao do hub.
+  pcall(function()
+    local updatesTab = LOCOPANI_RAY_TABS.Updates
+    if not updatesTab then return end
+    updatesTab:CreateSection({ name = "Historico de atualizacoes" })
+    for _, update in ipairs(history) do
+      updatesTab:CreateSection({ name = update.date .. " - " .. update.title })
+      for _, change in ipairs(update.changes) do
+        updatesTab:CreateParagraph({ Title = "Update ocorrida", Content = "- " .. change })
+      end
+    end
+    updatesTab:CreateSection({ name = "Como adicionar uma update" })
+    updatesTab:CreateParagraph({
+      Title = "Dica",
+      Content = "Adicione novas entradas a tabela history neste bloco, com data, titulo e lista de mudancas.",
+    })
+  end)
+end
 
 local function LOCOPANI_RayControl(kind, tab, name, cfg, callback)
   cfg = cfg or {}
@@ -9156,6 +9265,195 @@ v545.Visuals:AddRightGroupbox("Ball Prediction"):AddToggle("ballmarker", {
   end,
 })
 
+-- Visual-only level override: changes local PlayerGui text only, never server data.
+local LOCOPANI_VisualLevel = {
+  Enabled = false,
+  Value = "1000",
+  Records = {},
+  AddedConn = nil,
+  CharacterConn = nil,
+  CharacterAddedConn = nil,
+}
+
+function LOCOPANI_VisualLevel:IsLevelLabel(label)
+  if not label or not (label:IsA("TextLabel") or label:IsA("TextButton")) then
+    return false
+  end
+  local name = string.lower(tostring(label.Name or ""))
+  local currentText = tostring(label.Text or "")
+  local lowerText = string.lower(currentText)
+  local namedAsLevel = string.find(name, "level", 1, true) or string.find(name, "lvl", 1, true)
+  local textHasLevel = string.find(lowerText, "level", 1, true) or
+    string.find(lowerText, "lvl", 1, true) or
+    string.find(lowerText, "lv.", 1, true) or
+    string.match(lowerText, "^%s*lv%s*%d+")
+  local isJustNumber = string.match(currentText, "^%s*%d+%s*$") ~= nil
+
+  -- Overhead level labels are often parented to the local character's Head
+  -- inside a BillboardGui, not inside PlayerGui. Inspect ancestor names too.
+  local ancestor = label.Parent
+  local inBillboard = false
+  local ancestorHintsLevel = false
+  while ancestor do
+    local ancestorName = string.lower(tostring(ancestor.Name or ""))
+    if ancestor:IsA("BillboardGui") then inBillboard = true end
+    if string.find(ancestorName, "level", 1, true) or string.find(ancestorName, "lvl", 1, true) then
+      ancestorHintsLevel = true
+    end
+    ancestor = ancestor.Parent
+  end
+
+  return namedAsLevel ~= nil or textHasLevel ~= nil or ancestorHintsLevel or
+    (isJustNumber and (string.find(name, "exp", 1, true) ~= nil or inBillboard))
+end
+
+function LOCOPANI_VisualLevel:MakeSpoofedText(label, sourceText)
+  local desired = tostring(math.max(0, math.floor(tonumber(self.Value) or 1000)))
+  local original = tostring(sourceText or "")
+  local lower = string.lower(original)
+  if string.match(original, "^%s*%d+%s*$") and
+    (string.find(string.lower(label.Name), "level", 1, true) or string.find(string.lower(label.Name), "lvl", 1, true)) then
+    return string.gsub(original, "%d+", desired, 1)
+  end
+  if string.find(lower, "level", 1, true) or string.find(lower, "lvl", 1, true) or string.find(lower, "lv.", 1, true) or string.match(lower, "^%s*lv%s*%d+") then
+    local replaced, count = string.gsub(original, "%d+", desired, 1)
+    if count > 0 then return replaced end
+  end
+  return nil
+end
+
+function LOCOPANI_VisualLevel:Watch(label)
+  if not self.Enabled or not self:IsLevelLabel(label) then return end
+  if self.Records[label] then
+    local record = self.Records[label]
+    if record.busy then return end
+    local nowText = tostring(label.Text or "")
+    if nowText ~= record.spoofed then
+      record.original = nowText
+      local spoofed = self:MakeSpoofedText(label, record.original)
+      if spoofed then
+        record.spoofed = spoofed
+        record.busy = true
+        label.Text = spoofed
+        record.busy = false
+      end
+    end
+    return
+  end
+
+  local original = tostring(label.Text or "")
+  local spoofed = self:MakeSpoofedText(label, original)
+  if not spoofed then return end
+  local record = { original = original, spoofed = spoofed, busy = true, connection = nil }
+  self.Records[label] = record
+  label.Text = spoofed
+  record.busy = false
+  record.connection = label:GetPropertyChangedSignal("Text"):Connect(function()
+    if not self.Enabled or record.busy or not label.Parent then return end
+    local current = tostring(label.Text or "")
+    if current == record.spoofed then return end
+    record.original = current
+    local updated = self:MakeSpoofedText(label, record.original)
+    if updated then
+      record.spoofed = updated
+      record.busy = true
+      label.Text = updated
+      record.busy = false
+    end
+  end)
+end
+
+function LOCOPANI_VisualLevel:WatchContainer(container)
+  if not container then return end
+  for _, item in ipairs(container:GetDescendants()) do
+    if item:IsA("TextLabel") or item:IsA("TextButton") then
+      self:Watch(item)
+    end
+  end
+  if container:IsA("Model") and container:FindFirstChildOfClass("Humanoid") then
+    -- The level over the character is normally in a BillboardGui under the
+    -- character/head, outside PlayerGui. Only scan the local character.
+    for _, item in ipairs(container:GetDescendants()) do
+      if item:IsA("BillboardGui") then
+        for _, guiItem in ipairs(item:GetDescendants()) do
+          if guiItem:IsA("TextLabel") or guiItem:IsA("TextButton") then
+            self:Watch(guiItem)
+          end
+        end
+      end
+    end
+  end
+end
+
+function LOCOPANI_VisualLevel:Apply()
+  if not self.Enabled then return end
+  local player = localPlayer2 or game:GetService("Players").LocalPlayer
+  if not player then return end
+  local playerGui = player:FindFirstChildOfClass("PlayerGui")
+  if playerGui then
+    self:WatchContainer(playerGui)
+    if not self.AddedConn then
+      self.AddedConn = playerGui.DescendantAdded:Connect(function(item)
+        if self.Enabled and (item:IsA("TextLabel") or item:IsA("TextButton")) then
+          task.defer(function() self:Watch(item) end)
+        end
+      end)
+    end
+  end
+
+  local function bindCharacter(character)
+    if not self.Enabled or not character then return end
+    if self.CharacterConn then
+      self.CharacterConn:Disconnect()
+      self.CharacterConn = nil
+    end
+    self:WatchContainer(character)
+    self.CharacterConn = character.DescendantAdded:Connect(function(item)
+      if self.Enabled and (item:IsA("TextLabel") or item:IsA("TextButton")) then
+        task.defer(function() self:Watch(item) end)
+      elseif self.Enabled and item:IsA("BillboardGui") then
+        task.defer(function() self:WatchContainer(item) end)
+      end
+    end)
+  end
+
+  if player.Character then bindCharacter(player.Character) end
+  if not self.CharacterAddedConn then
+    self.CharacterAddedConn = player.CharacterAdded:Connect(function(character)
+      task.defer(function() bindCharacter(character) end)
+    end)
+  end
+end
+
+function LOCOPANI_VisualLevel:SetEnabled(enabled)
+  self.Enabled = enabled == true
+  if self.Enabled then
+    self:Apply()
+    return
+  end
+  if self.AddedConn then
+    self.AddedConn:Disconnect()
+    self.AddedConn = nil
+  end
+  if self.CharacterConn then
+    self.CharacterConn:Disconnect()
+    self.CharacterConn = nil
+  end
+  if self.CharacterAddedConn then
+    self.CharacterAddedConn:Disconnect()
+    self.CharacterAddedConn = nil
+  end
+  for label, record in pairs(self.Records) do
+    if record.connection then record.connection:Disconnect() end
+    if label and label.Parent then
+      record.busy = true
+      label.Text = record.original
+      record.busy = false
+    end
+    self.Records[label] = nil
+  end
+end
+
 v546.VisualScoreGroup = v545.Visuals:AddLeftGroupbox("Score Effect")
 
 v546.VisualScoreGroup:AddDropdown("effectselect", {
@@ -9294,6 +9592,14 @@ v546.PlayerCardGroup:AddToggle("playercard", {
   Callback = function(value159)
     v206 = value159
 
+    -- Add/remove PlayerCard items in the local inventory view while enabled.
+    -- This is client-side only; it does not grant server-side ownership.
+    pcall(function()
+      if v451 and v451.mark then
+        v451.mark("PlayerCard", value159)
+      end
+    end)
+
     if value159 then
       f58()
     elseif not v238.CardEnabled then
@@ -9363,6 +9669,47 @@ v546.BallSkinGroup:AddToggle("randomball", {
   Tooltip = "Pick random ball when ball spawns",
   Default = false,
   Callback = function(value164) v238.BallEnabled = value164 end,
+})
+
+v546.VisualLevelGroup = v545.Visuals:AddRightGroupbox("Visual Level")
+
+v546.VisualLevelGroup:AddInput("visuallevelvalue", {
+  Default = "1000",
+  Text = "Displayed Level",
+  Placeholder = "1000",
+  Callback = function(value167)
+    local numeric = tonumber(value167)
+    if numeric and numeric >= 0 then
+      LOCOPANI_VisualLevel.Value = tostring(math.floor(numeric))
+      if LOCOPANI_VisualLevel.Enabled then
+        LOCOPANI_VisualLevel:SetEnabled(false)
+        LOCOPANI_VisualLevel:SetEnabled(true)
+      end
+    end
+  end,
+})
+
+v546.VisualLevelGroup:AddToggle("visuallevel", {
+  Text = "Change Level (Visual Only)",
+  Tooltip = "Changes level text locally in your interface only; it does not change the real account level.",
+  Default = false,
+  Callback = function(value168)
+    LOCOPANI_VisualLevel:SetEnabled(value168)
+    v174:Notify(value168 and ("Visual level set to " .. LOCOPANI_VisualLevel.Value) or "Visual level disabled")
+  end,
+})
+
+v546.VisualLevelGroup:AddButton({
+  Text = "Apply Visual Level",
+  Func = function()
+    if LOCOPANI_VisualLevel.Enabled then
+      LOCOPANI_VisualLevel:SetEnabled(false)
+      LOCOPANI_VisualLevel:SetEnabled(true)
+      v174:Notify("Visual level applied: " .. LOCOPANI_VisualLevel.Value)
+    else
+      v174:Notify("Enable Change Level (Visual Only) first")
+    end
+  end,
 })
 
 v546.JerseyGroup = v545.Visuals:AddRightGroupbox("Jersey Changer")
@@ -10035,131 +10382,8 @@ do
   v174:SetConfigFolder("LOCOPANI")
   pcall(function() v174:LoadAutoloadConfig() end)
 
-  local function f132()
-    local LocalPlayer_2 = players.LocalPlayer
-    local LOCOPANI_WINDOW = _G.LOCOPANI_WINDOW
-
-    local ScreenGui_7 = Instance.new("ScreenGui")
-    ScreenGui_7.Name = "LOCOPANI_Toggle"
-    ScreenGui_7.ResetOnSpawn = false
-    ScreenGui_7.IgnoreGuiInset = true
-    ScreenGui_7.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui_7.DisplayOrder = 9999
-    ScreenGui_7.Parent = LocalPlayer_2:WaitForChild("PlayerGui")
-
-    local ImageButton = Instance.new("ImageButton")
-    ImageButton.Size = UDim2.new(0, 55, 0, 55)
-    ImageButton.Position = UDim2.new(0.01, 0, 0.5, -27.5)
-    ImageButton.BackgroundColor3 = Color3.fromRGB(10, 10, 11)
-    ImageButton.BackgroundTransparency = 0.15
-    ImageButton.BorderSizePixel = 0
-    ImageButton.Selectable = false
-    ImageButton.ZIndex = 9999
-    ImageButton.Image = ""
-    ImageButton.ImageTransparency = 0.1
-    ImageButton.ScaleType = Enum.ScaleType.Fit
-    ImageButton.Parent = ScreenGui_7
-
-    -- Texto simples no lugar do ícone antigo
-    local ToggleLabel = Instance.new("TextLabel")
-    ToggleLabel.Name = "LOCOPANI_Label"
-    ToggleLabel.BackgroundTransparency = 1
-    ToggleLabel.Size = UDim2.new(1, 0, 1, 0)
-    ToggleLabel.Text = "L"
-    ToggleLabel.TextColor3 = Color3.fromRGB(235, 235, 235)
-    ToggleLabel.TextSize = 24
-    ToggleLabel.Font = Enum.Font.GothamBold
-    ToggleLabel.Active = false
-    ToggleLabel.Selectable = false
-    ToggleLabel.ZIndex = 10000
-    ToggleLabel.Parent = ImageButton
-
-    local UICorner_9 = Instance.new("UICorner")
-    UICorner_9.CornerRadius = UDim.new(1, 0)
-    UICorner_9.Parent = ImageButton
-
-    local UIStroke = Instance.new("UIStroke")
-    UIStroke.Color = Color3.fromRGB(245, 245, 247)
-    UIStroke.Thickness = 2
-    UIStroke.Transparency = 0.3
-    UIStroke.Parent = ImageButton
-
-    local UIGradient = Instance.new("UIGradient")
-
-    UIGradient.Color = ColorSequence.new({
-      ColorSequenceKeypoint.new(0, Color3.fromRGB(245, 245, 247)),
-      ColorSequenceKeypoint.new(0.5, Color3.fromRGB(130, 130, 136)),
-      ColorSequenceKeypoint.new(1, Color3.fromRGB(245, 245, 247)),
-    })
-
-    UIGradient.Rotation = 45
-    UIGradient.Parent = UIStroke
-
-    local v560 = false
-    local position20, position21
-
-    ImageButton.InputBegan:Connect(function(input11)
-      if input11.UserInputType == Enum.UserInputType.MouseButton1
-        or input11.UserInputType == Enum.UserInputType.Touch then
-        v560 = true
-        position20 = input11.Position
-        position21 = ImageButton.Position
-
-        input11.Changed:Connect(function()
-          if input11.UserInputState == Enum.UserInputState.End then
-            v560 = false
-          end
-        end)
-      end
-    end)
-
-    ImageButton.InputChanged:Connect(function(input12)
-      if v560
-        and (input12.UserInputType == Enum.UserInputType.MouseMovement
-          or input12.UserInputType == Enum.UserInputType.Touch) then
-        local v561 = input12.Position - position20
-
-        ImageButton.Position = UDim2.new(
-          position21.X.Scale, position21.X.Offset + v561.X, position21.Y.Scale,
-          position21.Y.Offset + v561.Y
-        )
-      end
-    end)
-
-    ImageButton.MouseEnter:Connect(function()
-      ImageButton.ImageTransparency = 0
-      UIStroke.Transparency = 0
-      ImageButton.BackgroundTransparency = 0.05
-    end)
-
-    ImageButton.MouseLeave:Connect(function()
-      ImageButton.ImageTransparency = 0.1
-      UIStroke.Transparency = 0.3
-      ImageButton.BackgroundTransparency = 0.15
-    end)
-
-    local v562 = LOCOPANI_RAY_VISIBLE
-
-    ImageButton.MouseButton1Click:Connect(function()
-      LOCOPANI_RAY_VISIBLE = not LOCOPANI_RAY_VISIBLE
-      v562 = LOCOPANI_RAY_VISIBLE
-
-      -- Never reveal the legacy UI; only toggle the Rayfield Gen2 window.
-      if LOCOPANI_WINDOW and LOCOPANI_WINDOW.Instance then
-        LOCOPANI_WINDOW.Instance.Visible = false
-      end
-      LOCOPANI_SetRayfieldVisibility(v562)
-
-      ImageButton.ImageTransparency = v562 and 0.1 or 0.7
-      UIStroke.Transparency = v562 and 0.3 or 0.8
-      ImageButton.BackgroundTransparency = v562 and 0.15 or 0.6
-    end)
-
-    return ImageButton
-  end
-
-  f132()
-
+  -- O botao flutuante circular com "L" foi removido.
+  -- A janela principal continua podendo ser aberta/fechada com RightShift.
   v174:Notify("LOCOPANI HUB Loaded Successfully! UPDATE V2.3")
   pcall(function() LOCOPANI_RAY_WINDOW:Notify({ title = "LOCOPANI", content = "HUB Loaded Successfully! UPDATE V2.3" }) end)
 end
