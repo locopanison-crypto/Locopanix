@@ -1280,10 +1280,26 @@ do
         local v86 = {}
 
         local function f24()
-          f6_22.Text = tostring(v85.Value or "--")
+          if P61.Multi then
+            local selectedLabels = {}
+            for _, item in ipairs(v85.Values) do
+              if type(v85.Value) == "table" and v85.Value[item] then
+                table.insert(selectedLabels, tostring(item))
+              end
+            end
+            f6_22.Text = #selectedLabels > 0 and table.concat(selectedLabels, ", ") or "Nenhum selecionado"
+          else
+            f6_22.Text = tostring(v85.Value or "--")
+          end
 
           for key2, value15 in pairs(v86) do
-            if key2 == v85.Value then
+            local isSelected
+            if P61.Multi then
+              isSelected = type(v85.Value) == "table" and v85.Value[key2] == true
+            else
+              isSelected = key2 == v85.Value
+            end
+            if isSelected then
               f11(value15.Frame, { BackgroundColor3 = v29.AccentSoft })
               f11(value15.Edge, { Transparency = 0, Color = v29.Accent })
               f11(value15.Label, { TextColor3 = v29.Text })
@@ -1296,7 +1312,11 @@ do
         end
 
         function v85:SetValue(p62, p63)
-          v85.Value = p62
+          if P61.Multi then
+            v85.Value = type(p62) == "table" and p62 or {}
+          else
+            v85.Value = p62
+          end
           f24()
 
           if p63 then
@@ -1378,8 +1398,19 @@ do
             }
 
             f12(f6_26.MouseButton1Click, function()
-              v85:SetValue(Value18)
-              f25()
+              if P61.Multi then
+                local selected = {}
+                if type(v85.Value) == "table" then
+                  for selectedName, enabled in pairs(v85.Value) do
+                    if enabled then selected[selectedName] = true end
+                  end
+                end
+                selected[Value18] = not selected[Value18] or nil
+                v85:SetValue(selected)
+              else
+                v85:SetValue(Value18)
+                f25()
+              end
             end)
           end
 
@@ -4015,85 +4046,125 @@ do
 
   local function f59()
     v212 = {}
+    local seen = {}
     local Assets = replicatedStorage:FindFirstChild("Assets")
     local Ball = Assets and Assets:FindFirstChild("Ball")
 
     if Ball then
-      for index42, value49 in ipairs(Ball:GetChildren()) do
-        if value49:IsA("Model") then
-          table.insert(v212, value49.Name)
+      for _, asset in ipairs(Ball:GetChildren()) do
+        if asset:IsA("Model") and not seen[asset.Name] then
+          seen[asset.Name] = true
+          table.insert(v212, asset.Name)
+        end
+      end
+    end
+
+    -- Some games register ball cosmetics as inventory Item modules too.
+    local entities = replicatedStorage:FindFirstChild("Content")
+      and replicatedStorage.Content:FindFirstChild("Item")
+      and replicatedStorage.Content.Item:FindFirstChild("Entities")
+    if entities then
+      for _, module in ipairs(entities:GetChildren()) do
+        if module:IsA("ModuleScript") then
+          local okItem, itemData = pcall(require, module)
+          if okItem and type(itemData) == "table" and itemData.Type == "Ball"
+            and not seen[module.Name] then
+            seen[module.Name] = true
+            table.insert(v212, module.Name)
+          end
         end
       end
     end
 
     table.sort(v212)
-
     if #v212 == 0 then
       table.insert(v212, "ClassicBall")
       table.insert(v212, "ExtremeBall")
       table.insert(v212, "MediumBall")
     end
-
     return v212
   end
 
   local function f60()
     v210 = {}
-    local Entities = replicatedStorage.Content.Item.Entities
+    local seen = {}
+    local content = replicatedStorage:FindFirstChild("Content")
+    local itemFolder = content and content:FindFirstChild("Item")
+    local Entities = itemFolder and itemFolder:FindFirstChild("Entities")
 
     if Entities then
-      for index43, value50 in ipairs(Entities:GetChildren()) do
-        if value50:IsA("ModuleScript") then
-          local Name = value50.Name
-
-          if string.match(Name, "Card") or string.match(Name, "PlayerCard") then
-            table.insert(v210, Name)
+      for _, module in ipairs(Entities:GetChildren()) do
+        if module:IsA("ModuleScript") then
+          local okItem, itemData = pcall(require, module)
+          local itemName = module.Name
+          local isCard = string.match(itemName, "Card") ~= nil
+            or string.match(itemName, "PlayerCard") ~= nil
+            or (okItem and type(itemData) == "table"
+              and (itemData.Type == "PlayerCard" or itemData.Type == "Card"))
+          if isCard and not seen[itemName] then
+            seen[itemName] = true
+            table.insert(v210, itemName)
           end
         end
       end
     end
 
     table.sort(v210)
-
     if #v210 == 0 then
       table.insert(v210, "ContentCreatorPlayerCard")
       table.insert(v210, "UltimateChampionPlayerCard")
       table.insert(v210, "ProPlayerCard")
     end
-
     return v210
   end
 
   local function f61()
     v205 = {}
-    local ScoreEffect = replicatedStorage.Assets:FindFirstChild("ScoreEffect")
+    local seen = {}
+    local Assets = replicatedStorage:FindFirstChild("Assets")
+    local ScoreEffect = Assets and Assets:FindFirstChild("ScoreEffect")
 
     if ScoreEffect then
-      for index44, value51 in ipairs(ScoreEffect:GetChildren()) do
-        if value51:IsA("ModuleScript") then
-          table.insert(v205, value51.Name)
+      for _, asset in ipairs(ScoreEffect:GetChildren()) do
+        if asset:IsA("ModuleScript") and not seen[asset.Name] then
+          seen[asset.Name] = true
+          table.insert(v205, asset.Name)
         end
       end
     end
 
-    local Effects = replicatedStorage.Assets:FindFirstChild("Effects")
+    local Entities = replicatedStorage:FindFirstChild("Content")
+      and replicatedStorage.Content:FindFirstChild("Item")
+      and replicatedStorage.Content.Item:FindFirstChild("Entities")
+    if Entities then
+      for _, module in ipairs(Entities:GetChildren()) do
+        if module:IsA("ModuleScript") then
+          local okItem, itemData = pcall(require, module)
+          if okItem and type(itemData) == "table" and itemData.Type == "ScoreEffect"
+            and not seen[module.Name] then
+            seen[module.Name] = true
+            table.insert(v205, module.Name)
+          end
+        end
+      end
+    end
 
+    local Effects = Assets and Assets:FindFirstChild("Effects")
     if Effects then
-      for index45, value52 in ipairs({ "GroundHit1", "GroundHit2", "SupernovaScoreEffect" }) do
-        if Effects:FindFirstChild(value52) then
-          table.insert(v205, value52)
+      for _, name in ipairs({ "GroundHit1", "GroundHit2", "SupernovaScoreEffect" }) do
+        if Effects:FindFirstChild(name) and not seen[name] then
+          seen[name] = true
+          table.insert(v205, name)
         end
       end
     end
 
     table.sort(v205)
-
     if #v205 == 0 then
       table.insert(v205, "SupernovaScoreEffect")
       table.insert(v205, "GroundHit1")
       table.insert(v205, "GroundHit2")
     end
-
     return v205
   end
 
@@ -4595,15 +4666,21 @@ do
 
           if v255.enabled and type(v303) == "table"
             and (v303.Move == "Spike" or v303.Move == "ServeSpike") then
-            local steer = v255.steer
+            local steer = v255.enabled and v255.steer or nil
+            if typeof(steer) ~= "Vector3" and currentCamera2 then
+              steer = currentCamera2.CFrame.LookVector
+            end
 
             if typeof(steer) == "Vector3" then
               local Vector3_6 = Vector3.new(steer.X, 0, steer.Z)
 
               if Vector3_6.Magnitude > 0.01 then
                 local New_2 = (Vector3_6.Unit - Vector3.new(0, 0.35, 0)).Unit
-                v303.LookVector = New_2
-                v303.Direction = New_2
+                if v255.enabled then
+                  v303.LookVector = New_2
+                  v303.Direction = New_2
+                end
+
               end
             end
           end
@@ -7246,12 +7323,20 @@ function v440.install()
   end
 end
 
-v451 = { real = nil, want = {} }
+v451 = { real = nil, want = {}, selected = {}, selectedItems = {}, featureEnabled = {}, controlEnabled = false }
 
 function v451.mark(p185, p186)
-  v451.want[p185] = p186 or nil
+  -- The controlled inventory hides unselected cards, balls and score effects locally.
+  v451.featureEnabled = v451.featureEnabled or {}
+  v451.featureEnabled[p185] = p186 == true
+  v451.want = {}
+  for selectedType, selectedEnabled in pairs(v451.selected or {}) do
+    if selectedEnabled then
+      v451.want[selectedType] = true
+    end
+  end
 
-  if p186 then
+  if v451.controlEnabled == true or next(v451.want) ~= nil then
     v451.wear()
   end
 
@@ -7314,12 +7399,7 @@ function v451.mark(p185, p186)
           end
         end
 
-        local v463 = false
-        local v464, v465, v466 = pairs(v451.want)
-
-        if v464(v465, v466) then
-          v463 = true
-        end
+        local v463 = v451.controlEnabled == true or next(v451.want) ~= nil
 
         if not v463 then
           pcall(function() v456.Inventory:set(v451.real) end)
@@ -7342,19 +7422,73 @@ function v451.mark(p185, p186)
 
           v454 = {}
 
-          for key14, value93 in pairs(v451.real) do
-            v454[key14] = value93
+          local function itemType(itemName)
+            local itemModule = Entities_3:FindFirstChild(itemName)
+            if itemModule and itemModule:IsA("ModuleScript") then
+              local okItem, itemData = pcall(require, itemModule)
+              if okItem and type(itemData) == "table" then
+                return itemData.Type
+              end
+            end
+            return nil
           end
 
-          for index85, value94 in ipairs(Entities_3:GetChildren()) do
-            if value94:IsA("ModuleScript") and not v454[value94.Name] then
-              local v470, v471 = pcall(require, value94)
+          local controlledTypes = {
+            PlayerCard = true,
+            Card = true,
+            Ball = true,
+            ScoreEffect = true,
+          }
 
-              if v470 and type(v471) == "table" and v471.Type then
-                for key15 in pairs(v451.want) do
-                  if v471.Type == v468.Type[key15] then
-                    v454[value94.Name] = 1
-                    break
+          local function isControlledCosmetic(itemName)
+            -- First check the dropdown lists (this also covers ball assets that
+            -- are models rather than Item.Entity ModuleScripts).
+            for _, list in ipairs({ v210 or {}, v212 or {}, v205 or {} }) do
+              for _, listedName in ipairs(list) do
+                if listedName == itemName then return true end
+              end
+            end
+            -- Then classify by the actual inventory Item module type. This
+            -- catches score effects/cards omitted from the old dropdown lists.
+            local kind = itemType(itemName)
+            if kind and controlledTypes[kind] == true then return true end
+            -- Fallback for cosmetic inventory entries whose Item module is
+            -- missing or uses a nonstandard Type field.
+            local lowered = string.lower(tostring(itemName))
+            return string.find(lowered, "playercard", 1, true) ~= nil
+              or string.find(lowered, "card", 1, true) ~= nil
+              or string.find(lowered, "ball", 1, true) ~= nil
+              or string.find(lowered, "scoreeffect", 1, true) ~= nil
+              or string.find(lowered, "groundhit", 1, true) ~= nil
+          end
+
+          for key14, value93 in pairs(v451.real) do
+            if v451.controlEnabled ~= true or not isControlledCosmetic(key14)
+              or (v451.selectedItems and v451.selectedItems[key14]) then
+              v454[key14] = value93
+            end
+          end
+
+          if v451.controlEnabled == true then
+            -- Explicitly add every selected item, including Ball models that
+            -- do not have a matching ModuleScript under Content.Item.Entities.
+            for itemName, enabled in pairs(v451.selectedItems or {}) do
+              if enabled then
+                v454[itemName] = (v451.real and v451.real[itemName]) or 1
+              end
+            end
+          else
+            -- Preserve the pre-existing visual unlock behavior when the
+            -- separate legacy changer toggles are used.
+            for index85, value94 in ipairs(Entities_3:GetChildren()) do
+              if value94:IsA("ModuleScript") and not v454[value94.Name] then
+                local v470, v471 = pcall(require, value94)
+                if v470 and type(v471) == "table" and v471.Type then
+                  for key15 in pairs(v451.want) do
+                    if v471.Type == v468.Type[key15] then
+                      v454[value94.Name] = 1
+                      break
+                    end
                   end
                 end
               end
@@ -7999,6 +8133,9 @@ do
           if Facing and Facing.Magnitude > 0 then
             v255.steer = Facing
 
+            -- O tilt e aplicado no instante do spike, nao no salto,
+            -- para evitar que uma chamada antecipada sobrescreva a selecao.
+
             if v201 or v255.enabled then
               HumanoidRootPart_12.CFrame = CFrame.lookAt(HumanoidRootPart_12.Position, HumanoidRootPart_12.Position
                 + Facing.Unit)
@@ -8391,6 +8528,7 @@ local LOCOPANI_RAY_TABS = {
   Main = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Main" }),
   Character = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Character" }),
   Visuals = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Visuals" }),
+  ["Inventário Controlado"] = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Inventário Controlado" }),
   Misc = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Misc" }),
   GameJoin = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Game Join" }),
   ["UI Settings"] = LOCOPANI_RAY_WINDOW:CreateTab({ name = "UI Settings" }),
@@ -8479,6 +8617,14 @@ local function LOCOPANI_RayControl(kind, tab, name, cfg, callback)
   elseif kind == "Dropdown" then
     common.options = cfg.Values or {}
     common.value = cfg.Default
+    -- Rayfield Gen2 forks use different names for the multiselect option.
+    -- Forward the common variants; the callback below also normalizes either
+    -- a table of selections or the single item returned by older dropdowns.
+    common.multiselect = cfg.Multi == true
+    common.multiSelect = cfg.Multi == true
+    common.multiple = cfg.Multi == true
+    common.allowMultiple = cfg.Multi == true
+    common.Multi = cfg.Multi == true
     common.callback = onValue
     h = tab:CreateDropdown(common)
   elseif kind == "Input" or kind == "TextBox" then
@@ -9289,14 +9435,13 @@ function LOCOPANI_VisualLevel:IsLevelLabel(label)
     string.match(lowerText, "^%s*lv%s*%d+")
   local isJustNumber = string.match(currentText, "^%s*%d+%s*$") ~= nil
 
-  -- Overhead level labels are often parented to the local character's Head
-  -- inside a BillboardGui, not inside PlayerGui. Inspect ancestor names too.
+  -- Inspeciona os nomes dos ancestrais para localizar labels que realmente
+  -- representam level. Nao classifica todo numero de um BillboardGui como level,
+  -- pois ali tambem podem aparecer streaks e outras estatisticas.
   local ancestor = label.Parent
-  local inBillboard = false
   local ancestorHintsLevel = false
   while ancestor do
     local ancestorName = string.lower(tostring(ancestor.Name or ""))
-    if ancestor:IsA("BillboardGui") then inBillboard = true end
     if string.find(ancestorName, "level", 1, true) or string.find(ancestorName, "lvl", 1, true) then
       ancestorHintsLevel = true
     end
@@ -9304,7 +9449,7 @@ function LOCOPANI_VisualLevel:IsLevelLabel(label)
   end
 
   return namedAsLevel ~= nil or textHasLevel ~= nil or ancestorHintsLevel or
-    (isJustNumber and (string.find(name, "exp", 1, true) ~= nil or inBillboard))
+    (isJustNumber and string.find(name, "exp", 1, true) ~= nil)
 end
 
 function LOCOPANI_VisualLevel:MakeSpoofedText(label, sourceText)
@@ -9452,6 +9597,96 @@ function LOCOPANI_VisualLevel:SetEnabled(enabled)
     end
     self.Records[label] = nil
   end
+end
+
+-- Inventário Controlado: selections are tracked independently for each category.
+-- Works with native table-based multiselect dropdowns and older single-value dropdown callbacks.
+do
+  local inventoryControlGroup = v545["Inventário Controlado"]:AddLeftGroupbox("Controle do Inventário")
+  v451.controlSelections = v451.controlSelections or {
+    Cards = {},
+    Balls = {},
+    ScoreEffects = {},
+  }
+
+  local function rebuildSelectedItems()
+    v451.selectedItems = {}
+    for _, category in pairs(v451.controlSelections) do
+      for itemName, enabled in pairs(category) do
+        if enabled then v451.selectedItems[itemName] = true end
+      end
+    end
+  end
+
+  local function applySelection(categoryName, selected, validNames)
+    local current = v451.controlSelections[categoryName] or {}
+    local valid = {}
+    for _, itemName in ipairs(validNames or {}) do valid[itemName] = true end
+
+    if type(selected) == "table" then
+      local nextSelection = {}
+      -- Accept either { [name] = true } or an array { "name1", "name2" }.
+      for key, value in pairs(selected) do
+        if type(key) == "number" and type(value) == "string" then
+          if valid[value] then nextSelection[value] = true end
+        elseif type(key) == "string" and value == true and valid[key] then
+          nextSelection[key] = true
+        end
+      end
+      v451.controlSelections[categoryName] = nextSelection
+    elseif type(selected) == "string" and valid[selected] then
+      -- Fallback for Gen2 dropdowns that still return only one string:
+      -- each choice toggles that item while preserving previous selections.
+      current[selected] = not current[selected] or nil
+      v451.controlSelections[categoryName] = current
+    end
+
+    rebuildSelectedItems()
+    v451.mark("ControlledInventorySelection", false)
+  end
+
+  inventoryControlGroup:AddToggle("controlledinventoryenabled", {
+    Text = "Ativar inventário controlado",
+    Tooltip = "Quando ativado, só aparecem os Cards, Balls e Score Effects escolhidos nos menus abaixo.",
+    Default = false,
+    Callback = function(enabled)
+      v451.controlEnabled = enabled == true
+      v451.mark("ControlledInventory", enabled == true)
+    end,
+  })
+
+  local storeGroupCard = v545["Inventário Controlado"]:AddLeftGroupbox("Card Changer")
+  storeGroupCard:AddDropdown("storescamcards", {
+    Values = v210,
+    Default = {},
+    Multi = true,
+    Text = "Cards que aparecem no inventário",
+    Callback = function(selected)
+      applySelection("Cards", selected, v210)
+    end,
+  })
+
+  local storeGroupBall = v545["Inventário Controlado"]:AddRightGroupbox("Ball Changer")
+  storeGroupBall:AddDropdown("storescamballs", {
+    Values = v212,
+    Default = {},
+    Multi = true,
+    Text = "Bolas que aparecem no inventário",
+    Callback = function(selected)
+      applySelection("Balls", selected, v212)
+    end,
+  })
+
+  local storeGroupScore = v545["Inventário Controlado"]:AddLeftGroupbox("Score Effect Changer")
+  storeGroupScore:AddDropdown("storescamscoreeffects", {
+    Values = v205,
+    Default = {},
+    Multi = true,
+    Text = "Score Effects que aparecem no inventário",
+    Callback = function(selected)
+      applySelection("ScoreEffects", selected, v205)
+    end,
+  })
 end
 
 v546.VisualScoreGroup = v545.Visuals:AddLeftGroupbox("Score Effect")
