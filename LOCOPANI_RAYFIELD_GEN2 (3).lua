@@ -7443,7 +7443,7 @@ function v451.mark(p185, p186)
           local function isControlledCosmetic(itemName)
             -- First check the dropdown lists (this also covers ball assets that
             -- are models rather than Item.Entity ModuleScripts).
-            for _, list in ipairs({ v210 or {}, v212 or {}, v205 or {} }) do
+            for _, list in ipairs({ v210 or {}, v212 or {}, v205 or {}, v451.titleNames or {} }) do
               for _, listedName in ipairs(list) do
                 if listedName == itemName then return true end
               end
@@ -7460,6 +7460,7 @@ function v451.mark(p185, p186)
               or string.find(lowered, "ball", 1, true) ~= nil
               or string.find(lowered, "scoreeffect", 1, true) ~= nil
               or string.find(lowered, "groundhit", 1, true) ~= nil
+              or string.find(lowered, "title", 1, true) ~= nil
           end
 
           for key14, value93 in pairs(v451.real) do
@@ -7504,20 +7505,30 @@ function v451.mark(p185, p186)
 end
 
 function v451.typeOf(p187)
-  local Entities_4 = replicatedStorage.Content.Item:FindFirstChild("Entities")
-  local Child_2 = Entities_4 and Entities_4:FindFirstChild(p187)
-
-  if not Child_2 then
-    return nil
-  else
-    local v472, v473 = pcall(require, Child_2)
-
-    if v472 and type(v473) == "table" and v473.Type then
-      return v473.Type, v473
+  local content = replicatedStorage:FindFirstChild("Content")
+  local itemFolder = content and content:FindFirstChild("Item")
+  local entities = itemFolder and itemFolder:FindFirstChild("Entities")
+  local child = entities and entities:FindFirstChild(p187)
+  if child and child:IsA("ModuleScript") then
+    local okItem, itemData = pcall(require, child)
+    if okItem and type(itemData) == "table" and itemData.Type then
+      return itemData.Type, itemData
     end
-
-    return nil
   end
+  -- Asset-only cosmetics don't always have an Item.Entity module.
+  for _, name in ipairs(v210 or {}) do
+    if name == p187 then return "PlayerCard", { DisplayName = p187 } end
+  end
+  for _, name in ipairs(v205 or {}) do
+    if name == p187 then return "ScoreEffect", { DisplayName = p187 } end
+  end
+  for _, name in ipairs(v212 or {}) do
+    if name == p187 then return "Ball", { DisplayName = p187 } end
+  end
+  for _, name in ipairs(v451.titleNames or {}) do
+    if name == p187 then return "Title", { DisplayName = p187 } end
+  end
+  return nil
 end
 
 function v451.paint(p188, p189, p190)
@@ -9412,7 +9423,7 @@ v545.Visuals:AddRightGroupbox("Ball Prediction"):AddToggle("ballmarker", {
 })
 
 -- Visual-only level override: changes local PlayerGui text only, never server data.
-local LOCOPANI_VisualLevel = {
+LOCOPANI_VisualLevel = {
   Enabled = false,
   Value = "1000",
   Records = {},
@@ -9428,6 +9439,11 @@ function LOCOPANI_VisualLevel:IsLevelLabel(label)
   local name = string.lower(tostring(label.Name or ""))
   local currentText = tostring(label.Text or "")
   local lowerText = string.lower(currentText)
+  -- Never treat streak/win-streak UI as a level, even when nested under a shared BillboardGui.
+  if string.find(name, "streak", 1, true) or string.find(name, "win", 1, true) and string.find(name, "streak", 1, true) or
+    string.find(lowerText, "streak", 1, true) then
+    return false
+  end
   local namedAsLevel = string.find(name, "level", 1, true) or string.find(name, "lvl", 1, true)
   local textHasLevel = string.find(lowerText, "level", 1, true) or
     string.find(lowerText, "lvl", 1, true) or
@@ -9442,13 +9458,18 @@ function LOCOPANI_VisualLevel:IsLevelLabel(label)
   local ancestorHintsLevel = false
   while ancestor do
     local ancestorName = string.lower(tostring(ancestor.Name or ""))
+    if string.find(ancestorName, "streak", 1, true) then
+      return false
+    end
     if string.find(ancestorName, "level", 1, true) or string.find(ancestorName, "lvl", 1, true) then
       ancestorHintsLevel = true
     end
     ancestor = ancestor.Parent
   end
 
-  return namedAsLevel ~= nil or textHasLevel ~= nil or ancestorHintsLevel or
+  -- Do not infer that a numeric label is a level merely because a shared parent
+  -- contains the word "level"; this is what can accidentally capture the streak.
+  return namedAsLevel ~= nil or textHasLevel ~= nil or
     (isJustNumber and string.find(name, "exp", 1, true) ~= nil)
 end
 
@@ -9599,14 +9620,244 @@ function LOCOPANI_VisualLevel:SetEnabled(enabled)
   end
 end
 
+
+-- Independent visual streak override; it cannot modify level text or game data.
+LOCOPANI_VisualStreak = {
+  Enabled = false,
+  Value = "0",
+  Records = {},
+  AddedConn = nil,
+  CharacterConn = nil,
+  CharacterAddedConn = nil,
+}
+
+function LOCOPANI_VisualStreak:IsStreakLabel(label)
+  if not label or not (label:IsA("TextLabel") or label:IsA("TextButton")) then
+    return false
+  end
+  local name = string.lower(tostring(label.Name or ""))
+  local currentText = tostring(label.Text or "")
+  local lowerText = string.lower(currentText)
+  local namedAsStreak = string.find(name, "streak", 1, true) or string.find(name, "win", 1, true) and string.find(name, "series", 1, true)
+  local textHasStreak = string.find(lowerText, "streak", 1, true) or
+    string.find(lowerText, "win streak", 1, true) or
+    string.match(lowerText, "^%s*st%s*[:%.%-]?%s*%d+")
+  -- Neste jogo o streak do overhead pode aparecer apenas como um icone de fogo
+  -- seguido do numero (ex.: 🔥6767), sem a palavra "streak" no nome/texto.
+  local hasFireIcon = string.find(currentText, "🔥", 1, true) ~= nil
+  local isJustNumber = string.match(currentText, "^%s*%d+%s*$") ~= nil
+
+  -- Detecta labels pelo nome e contexto dos ancestrais.
+  local ancestor = label.Parent
+  local ancestorHintsStreak = false
+  local insideBillboard = false
+  local insideCharacterModel = false
+  local player = localPlayer2 or game:GetService("Players").LocalPlayer
+  while ancestor do
+    local ancestorName = string.lower(tostring(ancestor.Name or ""))
+    if string.find(ancestorName, "streak", 1, true) or string.find(ancestorName, "winstreak", 1, true) then
+      ancestorHintsStreak = true
+    end
+    if ancestor:IsA("BillboardGui") then
+      insideBillboard = true
+    end
+    if ancestor:IsA("Model") and ancestor:FindFirstChildOfClass("Humanoid") then
+      insideCharacterModel = true
+      break
+    end
+    ancestor = ancestor.Parent
+  end
+
+  -- No overhead mostrado pelo LOCOPANI, o fogo é um ícone separado e o
+  -- streak é apenas um número ("4"). O nível fica em outro label ("Lvl 232 - ..."),
+  -- portanto só aceita número isolado no BillboardGui do personagem local.
+  local isLocalCharacter = player and player.Character and label:IsDescendantOf(player.Character)
+  local numericOverheadStreak = isJustNumber and insideBillboard and insideCharacterModel and isLocalCharacter
+
+  return namedAsStreak ~= nil or textHasStreak ~= nil or ancestorHintsStreak or hasFireIcon or numericOverheadStreak
+end
+
+function LOCOPANI_VisualStreak:MakeSpoofedText(label, sourceText)
+  local desired = tostring(math.max(0, math.floor(tonumber(self.Value) or 1000)))
+  local original = tostring(sourceText or "")
+  local lower = string.lower(original)
+  -- IsStreakLabel já validou o contexto antes de chegar aqui; número isolado
+  -- nesse label é o streak do overhead.
+  if string.match(original, "^%s*%d+%s*$") then
+    return string.gsub(original, "%d+", desired, 1)
+  end
+  -- Altera somente o numero de labels identificados como streak, inclusive o
+  -- formato visual de fogo + numero usado no overhead do personagem.
+  if string.find(lower, "streak", 1, true) or string.find(lower, "win streak", 1, true) or
+    string.match(lower, "^%s*st%s*[:%.%-]?%s*%d+") or string.find(original, "🔥", 1, true) then
+    local replaced, count = string.gsub(original, "%d+", desired, 1)
+    if count > 0 then return replaced end
+  end
+  return nil
+end
+
+function LOCOPANI_VisualStreak:Watch(label)
+  if not self.Enabled or not self:IsStreakLabel(label) then return end
+  if self.Records[label] then
+    local record = self.Records[label]
+    if record.busy then return end
+    local nowText = tostring(label.Text or "")
+    if nowText ~= record.spoofed then
+      record.original = nowText
+      local spoofed = self:MakeSpoofedText(label, record.original)
+      if spoofed then
+        record.spoofed = spoofed
+        record.busy = true
+        label.Text = spoofed
+        record.busy = false
+      end
+    end
+    return
+  end
+
+  local original = tostring(label.Text or "")
+  local spoofed = self:MakeSpoofedText(label, original)
+  if not spoofed then return end
+  local record = { original = original, spoofed = spoofed, busy = true, connection = nil }
+  self.Records[label] = record
+  label.Text = spoofed
+  record.busy = false
+  record.connection = label:GetPropertyChangedSignal("Text"):Connect(function()
+    if not self.Enabled or record.busy or not label.Parent then return end
+    local current = tostring(label.Text or "")
+    if current == record.spoofed then return end
+    record.original = current
+    local updated = self:MakeSpoofedText(label, record.original)
+    if updated then
+      record.spoofed = updated
+      record.busy = true
+      label.Text = updated
+      record.busy = false
+    end
+  end)
+end
+
+function LOCOPANI_VisualStreak:WatchContainer(container)
+  if not container then return end
+  for _, item in ipairs(container:GetDescendants()) do
+    if item:IsA("TextLabel") or item:IsA("TextButton") then
+      self:Watch(item)
+    end
+  end
+  if container:IsA("Model") and container:FindFirstChildOfClass("Humanoid") then
+    -- The streak over the character is normally in a BillboardGui under the
+    -- character/head, outside PlayerGui. Only scan the local character.
+    for _, item in ipairs(container:GetDescendants()) do
+      if item:IsA("BillboardGui") then
+        for _, guiItem in ipairs(item:GetDescendants()) do
+          if guiItem:IsA("TextLabel") or guiItem:IsA("TextButton") then
+            self:Watch(guiItem)
+          end
+        end
+      end
+    end
+  end
+end
+
+function LOCOPANI_VisualStreak:Apply()
+  if not self.Enabled then return end
+  local player = localPlayer2 or game:GetService("Players").LocalPlayer
+  if not player then return end
+  local playerGui = player:FindFirstChildOfClass("PlayerGui")
+  if playerGui then
+    self:WatchContainer(playerGui)
+    if not self.AddedConn then
+      self.AddedConn = playerGui.DescendantAdded:Connect(function(item)
+        if self.Enabled and (item:IsA("TextLabel") or item:IsA("TextButton")) then
+          task.defer(function() self:Watch(item) end)
+        end
+      end)
+    end
+  end
+
+  local function bindCharacter(character)
+    if not self.Enabled or not character then return end
+    if self.CharacterConn then
+      self.CharacterConn:Disconnect()
+      self.CharacterConn = nil
+    end
+    self:WatchContainer(character)
+    self.CharacterConn = character.DescendantAdded:Connect(function(item)
+      if self.Enabled and (item:IsA("TextLabel") or item:IsA("TextButton")) then
+        task.defer(function() self:Watch(item) end)
+      elseif self.Enabled and item:IsA("BillboardGui") then
+        task.defer(function() self:WatchContainer(item) end)
+      end
+    end)
+  end
+
+  if player.Character then bindCharacter(player.Character) end
+  if not self.CharacterAddedConn then
+    self.CharacterAddedConn = player.CharacterAdded:Connect(function(character)
+      task.defer(function() bindCharacter(character) end)
+    end)
+  end
+end
+
+function LOCOPANI_VisualStreak:SetEnabled(enabled)
+  self.Enabled = enabled == true
+  if self.Enabled then
+    self:Apply()
+    return
+  end
+  if self.AddedConn then
+    self.AddedConn:Disconnect()
+    self.AddedConn = nil
+  end
+  if self.CharacterConn then
+    self.CharacterConn:Disconnect()
+    self.CharacterConn = nil
+  end
+  if self.CharacterAddedConn then
+    self.CharacterAddedConn:Disconnect()
+    self.CharacterAddedConn = nil
+  end
+  for label, record in pairs(self.Records) do
+    if record.connection then record.connection:Disconnect() end
+    if label and label.Parent then
+      record.busy = true
+      label.Text = record.original
+      record.busy = false
+    end
+    self.Records[label] = nil
+  end
+end
+
+
 -- Inventário Controlado: selections are tracked independently for each category.
 -- Works with native table-based multiselect dropdowns and older single-value dropdown callbacks.
 do
   local inventoryControlGroup = v545["Inventário Controlado"]:AddLeftGroupbox("Controle do Inventário")
+  -- Build title choices from the game's Item definitions.
+  v451.titleNames = {}
+  do
+    local content = replicatedStorage:FindFirstChild("Content")
+    local itemFolder = content and content:FindFirstChild("Item")
+    local entities = itemFolder and itemFolder:FindFirstChild("Entities")
+    local seenTitles = {}
+    if entities then
+      for _, module in ipairs(entities:GetChildren()) do
+        if module:IsA("ModuleScript") then
+          local okItem, itemData = pcall(require, module)
+          if okItem and type(itemData) == "table" and itemData.Type == "Title" and not seenTitles[module.Name] then
+            seenTitles[module.Name] = true
+            table.insert(v451.titleNames, module.Name)
+          end
+        end
+      end
+    end
+    table.sort(v451.titleNames)
+  end
   v451.controlSelections = v451.controlSelections or {
     Cards = {},
     Balls = {},
     ScoreEffects = {},
+    Titles = {},
   }
 
   local function rebuildSelectedItems()
@@ -9685,6 +9936,17 @@ do
     Text = "Score Effects que aparecem no inventário",
     Callback = function(selected)
       applySelection("ScoreEffects", selected, v205)
+    end,
+  })
+
+  local storeGroupTitle = v545["Inventário Controlado"]:AddRightGroupbox("Title Changer")
+  storeGroupTitle:AddDropdown("storescamtitles", {
+    Values = v451.titleNames,
+    Default = {},
+    Multi = true,
+    Text = "Titles que aparecem no inventário",
+    Callback = function(selected)
+      applySelection("Titles", selected, v451.titleNames)
     end,
   })
 end
@@ -9943,6 +10205,45 @@ v546.VisualLevelGroup:AddButton({
       v174:Notify("Visual level applied: " .. LOCOPANI_VisualLevel.Value)
     else
       v174:Notify("Enable Change Level (Visual Only) first")
+    end
+  end,
+})
+
+v546.VisualLevelGroup:AddInput("visualstreakvalue", {
+  Default = "0",
+  Text = "Displayed Streak",
+  Placeholder = "0",
+  Callback = function(value)
+    local numeric = tonumber(value)
+    if numeric and numeric >= 0 then
+      LOCOPANI_VisualStreak.Value = tostring(math.floor(numeric))
+      if LOCOPANI_VisualStreak.Enabled then
+        LOCOPANI_VisualStreak:SetEnabled(false)
+        LOCOPANI_VisualStreak:SetEnabled(true)
+      end
+    end
+  end,
+})
+
+v546.VisualLevelGroup:AddToggle("visualstreak", {
+  Text = "Streak Change (Visual Only)",
+  Tooltip = "Changes streak text locally only; it does not change real wins or level.",
+  Default = false,
+  Callback = function(value)
+    LOCOPANI_VisualStreak:SetEnabled(value)
+    v174:Notify(value and ("Visual streak set to " .. LOCOPANI_VisualStreak.Value) or "Visual streak disabled")
+  end,
+})
+
+v546.VisualLevelGroup:AddButton({
+  Text = "Apply Visual Streak",
+  Func = function()
+    if LOCOPANI_VisualStreak.Enabled then
+      LOCOPANI_VisualStreak:SetEnabled(false)
+      LOCOPANI_VisualStreak:SetEnabled(true)
+      v174:Notify("Visual streak applied: " .. LOCOPANI_VisualStreak.Value)
+    else
+      v174:Notify("Enable Streak Change (Visual Only) first")
     end
   end,
 })
