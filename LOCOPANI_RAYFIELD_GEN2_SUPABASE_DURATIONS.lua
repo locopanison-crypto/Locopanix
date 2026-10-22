@@ -85,12 +85,52 @@ local function LOCOPANI_ActivateKey(key)
         ("Ativação recusada: " .. tostring(data.status or "resposta desconhecida"))
 end
 
+-- Lembra a key neste executor para não pedir novamente em cada execução.
+-- A key salva NUNCA é considerada válida sem nova confirmação do Supabase.
+local LOCOPANI_KEY_FILE = "locopani_key.dat"
+
+local function LOCOPANI_GetSavedKey()
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    local isfileFn = env.isfile or isfile
+    local readfileFn = env.readfile or readfile
+    if type(isfileFn) ~= "function" or type(readfileFn) ~= "function" then
+        return nil
+    end
+    local okExists, exists = pcall(isfileFn, LOCOPANI_KEY_FILE)
+    if not okExists or not exists then return nil end
+    local okRead, saved = pcall(readfileFn, LOCOPANI_KEY_FILE)
+    if not okRead or type(saved) ~= "string" then return nil end
+    saved = string.upper(string.gsub(saved, "%s+", ""))
+    if saved == "" then return nil end
+    return saved
+end
+
+local function LOCOPANI_SaveKey(key)
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    local writefileFn = env.writefile or writefile
+    if type(writefileFn) == "function" then
+        pcall(writefileFn, LOCOPANI_KEY_FILE, key)
+    end
+end
+
 local function LOCOPANI_ShowKeyGate()
     local enteredKey = ""
     local accepted = false
     local busy = false
     local statusText = nil
     local statusLabel = nil
+
+    -- Primeiro tenta validar a key salva. Se expirou ou o servidor recusar,
+    -- continua para a tela normal de key.
+    local savedKey = LOCOPANI_GetSavedKey()
+    if savedKey then
+        local savedValid = false
+        local verifyOK, verifyResult = pcall(LOCOPANI_ActivateKey, savedKey)
+        savedValid = verifyOK and verifyResult == true
+        if savedValid then
+            return true
+        end
+    end
 
     -- A interface do sistema de key usa Rayfield Gen2; a lógica de ativação Supabase permanece igual.
     local Rayfield = loadstring(game:HttpGet("https://sirius.menu/gen2"))()
@@ -109,6 +149,34 @@ local function LOCOPANI_ShowKeyGate()
             enteredKey = tostring(value or "")
         end,
     })
+
+    keyTab:CreateButton({
+        name = "PEGAR ID ROBLOX",
+        callback = function()
+            local player = game:GetService("Players").LocalPlayer
+            local userId = tostring(player.UserId)
+            local env = (type(getgenv) == "function" and getgenv()) or _G
+            local clipboardFn = env.setclipboard or env.toclipboard
+                or env.set_clipboard or setclipboard or toclipboard
+
+            if type(clipboardFn) == "function" then
+                local copied = pcall(clipboardFn, userId)
+                if statusText and statusText.Set then
+                    pcall(function()
+                        statusText:Set(copied and
+                            ("ID do Roblox copiado: " .. userId) or
+                            "Não foi possível copiar. Copie seu ID manualmente: " .. userId)
+                    end)
+                end
+            elseif statusText and statusText.Set then
+                pcall(function()
+                    statusText:Set("Seu ID do Roblox: " .. userId ..
+                        " (este executor não oferece suporte à área de transferência)")
+                end)
+            end
+        end,
+    })
+
     statusText = keyTab:CreateText({ name = "Digite sua chave de acesso e clique em Validar key." })
 
     keyTab:CreateButton({
@@ -132,6 +200,7 @@ local function LOCOPANI_ShowKeyGate()
 
             local valid, message = LOCOPANI_ActivateKey(entered)
             if valid then
+                LOCOPANI_SaveKey(entered)
                 accepted = true
                 if statusText and statusText.Set then
                     pcall(function() statusText:Set("Chave validada. Iniciando LOCOPANI...") end)
@@ -1211,10 +1280,26 @@ do
         local v86 = {}
 
         local function f24()
-          f6_22.Text = tostring(v85.Value or "--")
+          if P61.Multi then
+            local selectedLabels = {}
+            for _, item in ipairs(v85.Values) do
+              if type(v85.Value) == "table" and v85.Value[item] then
+                table.insert(selectedLabels, tostring(item))
+              end
+            end
+            f6_22.Text = #selectedLabels > 0 and table.concat(selectedLabels, ", ") or "Nenhum selecionado"
+          else
+            f6_22.Text = tostring(v85.Value or "--")
+          end
 
           for key2, value15 in pairs(v86) do
-            if key2 == v85.Value then
+            local isSelected
+            if P61.Multi then
+              isSelected = type(v85.Value) == "table" and v85.Value[key2] == true
+            else
+              isSelected = key2 == v85.Value
+            end
+            if isSelected then
               f11(value15.Frame, { BackgroundColor3 = v29.AccentSoft })
               f11(value15.Edge, { Transparency = 0, Color = v29.Accent })
               f11(value15.Label, { TextColor3 = v29.Text })
@@ -1227,7 +1312,11 @@ do
         end
 
         function v85:SetValue(p62, p63)
-          v85.Value = p62
+          if P61.Multi then
+            v85.Value = type(p62) == "table" and p62 or {}
+          else
+            v85.Value = p62
+          end
           f24()
 
           if p63 then
@@ -1309,8 +1398,19 @@ do
             }
 
             f12(f6_26.MouseButton1Click, function()
-              v85:SetValue(Value18)
-              f25()
+              if P61.Multi then
+                local selected = {}
+                if type(v85.Value) == "table" then
+                  for selectedName, enabled in pairs(v85.Value) do
+                    if enabled then selected[selectedName] = true end
+                  end
+                end
+                selected[Value18] = not selected[Value18] or nil
+                v85:SetValue(selected)
+              else
+                v85:SetValue(Value18)
+                f25()
+              end
             end)
           end
 
@@ -2835,23 +2935,21 @@ local function f45()
 
     v232.NotifConn2 = Interface.DescendantAdded:Connect(function(descendant)
       if descendant:IsA("TextLabel") then
-        if not v232.Enabled then
-          return
-        else
-          if not localPlayer2 then
-            return
-          end
-
-          local text9 = descendant.Text or ""
-
-          if string.find(text9, localPlayer2.Name) then
-            descendant.Text = string.gsub(text9, localPlayer2.Name, v232.NameTag)
-          end
-
+        if not v232.Enabled or not localPlayer2 then
           return
         end
-      else
-        return
+
+        -- Nunca deixe o protetor antigo substituir o nome do Custom Protect.
+        if _G.CustomProtect and _G.CustomProtect.Enabled then
+          return
+        end
+
+        local text9 = descendant.Text or ""
+        if string.find(text9, localPlayer2.Name, 1, true) then
+          descendant.Text = string.gsub(text9, localPlayer2.Name, function()
+            return v232.NameTag
+          end)
+        end
       end
     end)
 
@@ -2860,6 +2958,10 @@ local function f45()
 end
 
 function f44(p120)
+  -- Quando o Custom Protect estiver ativo, deixe a legenda usar o nome personalizado.
+  if _G.CustomProtect and _G.CustomProtect.Enabled then
+    return
+  end
   if not v232.Enabled then
     return
   elseif not p120 then
@@ -2893,6 +2995,10 @@ function f44(p120)
 end
 
 local function f46()
+  -- O protetor antigo não deve sobrescrever o nome personalizado do Custom Protect.
+  if _G.CustomProtect and _G.CustomProtect.Enabled then
+    return
+  end
   if not v232.Enabled then
     return
   else
@@ -3071,35 +3177,84 @@ function v235.updateTitle()
   end
 end
 
-function v235.processNotification(p122)
-  if not v235.Enabled then
+v235.TextWatchers = v235.TextWatchers or {}
+
+function v235.replaceLegendName(label)
+  if not v235.Enabled or not localPlayer2 or not label
+    or not label:IsA("TextLabel") then
     return
-  elseif not p122 then
+  end
+
+  local text = label.Text or ""
+  local playerName = localPlayer2.Name
+  local customName = tostring(v235.Name or "CUSTOM NAME")
+  local oldProtectName = tostring(v232 and v232.NameTag or "LOCOPANI PROTECTION")
+
+  if text == "" then
     return
-  elseif not localPlayer2 then
+  end
+
+  -- O listener do protetor antigo pode ter trocado o nome primeiro.
+  -- Substituímos tanto o username real quanto o nome padrão antigo.
+  if playerName ~= "" and string.find(text, playerName, 1, true) then
+    text = string.gsub(text, playerName, function()
+      return customName
+    end)
+  end
+
+  if oldProtectName ~= "" and string.find(text, oldProtectName, 1, true) then
+    text = string.gsub(text, oldProtectName, function()
+      return customName
+    end)
+  end
+
+  -- Compatibilidade com textos já alterados para o nome padrão antigo.
+  if string.find(text, "LOCOPANI PROTECT", 1, true) then
+    text = string.gsub(text, "LOCOPANI PROTECT", function()
+      return customName
+    end)
+  end
+
+  if label.Text ~= text then
+    label.Text = text
+  end
+end
+
+function v235.watchLegendLabel(label)
+  if not label or not label:IsA("TextLabel") then
     return
-  else
-    local TextLabel_2 = p122:FindFirstChild("TextLabel")
+  end
 
-    if not TextLabel_2 then
-      for index31, value38 in ipairs(p122:GetDescendants()) do
-        if value38:IsA("TextLabel") then
-          TextLabel_2 = value38
-          break
-        end
-      end
-    end
+  -- Process immediately, and again whenever the game updates the label's text.
+  v235.replaceLegendName(label)
 
-    if not TextLabel_2 then
-      return
-    else
-      local text11 = TextLabel_2.Text or ""
+  if v235.TextWatchers[label] then
+    return
+  end
 
-      if string.find(text11, localPlayer2.Name) then
-        TextLabel_2.Text = string.gsub(text11, localPlayer2.Name, v235.Name)
-      end
+  local ok, connection = pcall(function()
+    return label:GetPropertyChangedSignal("Text"):Connect(function()
+      v235.replaceLegendName(label)
+    end)
+  end)
 
-      return
+  if ok and connection then
+    v235.TextWatchers[label] = connection
+  end
+end
+
+function v235.processNotification(item)
+  if not v235.Enabled or not item then
+    return
+  end
+
+  if item:IsA("TextLabel") then
+    v235.watchLegendLabel(item)
+  end
+
+  for _, descendant in ipairs(item:GetDescendants()) do
+    if descendant:IsA("TextLabel") then
+      v235.watchLegendLabel(descendant)
     end
   end
 end
@@ -3115,57 +3270,44 @@ function v235.setupNotifications()
     v235.NotifConn2 = nil
   end
 
-  if not v235.Enabled then
-    return
-  elseif not localPlayer2 then
-    return
-  else
-    local Interface_3 = localPlayer2.PlayerGui:FindFirstChild("Interface")
-
-    if Interface_3 then
-      Interface_3 = Interface_3:FindFirstChild("Persistent")
-
-      if Interface_3 then
-        Interface_3 = Interface_3:FindFirstChild("Notifications")
-      end
+  -- Remove text-change listeners from the previous interface.
+  for label, connection in pairs(v235.TextWatchers) do
+    if connection then
+      pcall(function() connection:Disconnect() end)
     end
+    v235.TextWatchers[label] = nil
+  end
 
-    if not Interface_3 then
+  if not v235.Enabled or not localPlayer2 then
+    return
+  end
+
+  local playerGui = localPlayer2:FindFirstChildOfClass("PlayerGui")
+  local interface = playerGui and playerGui:FindFirstChild("Interface")
+  if not interface then
+    return
+  end
+
+  -- Watch the whole Interface, not only Persistent/Notifications:
+  -- score announcements/legend labels may be created elsewhere.
+  v235.processNotification(interface)
+
+  v235.NotifConn = interface.DescendantAdded:Connect(function(descendant)
+    if not v235.Enabled then
       return
     end
 
-    for index32, value39 in ipairs(Interface_3:GetChildren()) do
-      v235.processNotification(value39)
+    if descendant:IsA("TextLabel") then
+      v235.watchLegendLabel(descendant)
+    else
+      v235.processNotification(descendant)
     end
+  end)
 
-    v235.NotifConn = Interface_3.ChildAdded:Connect(function(child3)
-      v235.processNotification(child3)
-    end)
-
-    v235.NotifConn2 = Interface_3.DescendantAdded:Connect(function(descendant2)
-      if descendant2:IsA("TextLabel") then
-        if not v235.Enabled then
-          return
-        else
-          if not localPlayer2 then
-            return
-          end
-
-          local text12 = descendant2.Text or ""
-
-          if string.find(text12, localPlayer2.Name) then
-            descendant2.Text = string.gsub(text12, localPlayer2.Name, v235.Name)
-          end
-
-          return
-        end
-      else
-        return
-      end
-    end)
-
-    return
-  end
+  -- Also catch labels directly parented to Interface.
+  v235.NotifConn2 = interface.ChildAdded:Connect(function(child)
+    v235.processNotification(child)
+  end)
 end
 
 function v235.protectPlayerCard()
@@ -3265,6 +3407,13 @@ function v235.toggle(p123)
     end
 
     v235.stopCardLoop()
+
+    for label, connection in pairs(v235.TextWatchers or {}) do
+      if connection then
+        pcall(function() connection:Disconnect() end)
+      end
+      v235.TextWatchers[label] = nil
+    end
 
     if localPlayer2.Character then
       local Nametag_4 = localPlayer2.Character:FindFirstChild("Nametag")
@@ -3485,39 +3634,101 @@ function f55()
 end
 
 local connect2
+local playerCardGuiConn
+local playerCardInterfaceConn
+local playerCardPersistentConn
+local playerCardPending = false
 
 local function f57()
   if connect2 then
     connect2:Disconnect()
     connect2 = nil
   end
-
+  if playerCardGuiConn then
+    playerCardGuiConn:Disconnect()
+    playerCardGuiConn = nil
+  end
+  if playerCardInterfaceConn then
+    playerCardInterfaceConn:Disconnect()
+    playerCardInterfaceConn = nil
+  end
+  if playerCardPersistentConn then
+    playerCardPersistentConn:Disconnect()
+    playerCardPersistentConn = nil
+  end
+  playerCardPending = false
   v228.__cardFiredFor = nil
   v208 = false
   v209 = false
 end
 
 local function f58()
-  if connect2 then
-    return
-  else
-    local Interface_6 = localPlayer2.PlayerGui:FindFirstChild("Interface")
-
-    if Interface_6 then
-      local Persistent_4 = Interface_6:FindFirstChild("Persistent")
-
-      if Persistent_4 then
-        connect2 = Persistent_4.ChildAdded:Connect(function(child5)
-          if child5.Name == "FlashPlayerCardFrame" then
-            task.wait(0.1)
-            f56()
-          end
-        end)
-      end
-    end
-
+  if connect2 or playerCardGuiConn then
     return
   end
+
+  local function attachPersistent(persistent)
+    if not persistent or not persistent:IsA("Instance") then return end
+    if connect2 and playerCardPersistentConn == persistent then return end
+    if connect2 then
+      connect2:Disconnect()
+      connect2 = nil
+    end
+    playerCardPersistentConn = persistent
+
+    local function onCardAdded(child5)
+      if child5.Name ~= "FlashPlayerCardFrame" or playerCardPending then return end
+      playerCardPending = true
+      task.spawn(function()
+        -- The game sometimes adds the card frame before its Username label is ready.
+        for attempt = 1, 12 do
+          if not child5.Parent then break end
+          local username = child5:FindFirstChild("Username", true)
+          if username and username:IsA("TextLabel") and username.Text ~= "" then
+            break
+          end
+          task.wait(0.05)
+        end
+        if child5.Parent then
+          f56()
+        end
+        playerCardPending = false
+      end)
+    end
+
+    connect2 = persistent.ChildAdded:Connect(onCardAdded)
+    -- Handle a card that appeared just before the listener was attached.
+    for _, existingCard in ipairs(persistent:GetChildren()) do
+      if existingCard.Name == "FlashPlayerCardFrame" then
+        onCardAdded(existingCard)
+      end
+    end
+  end
+
+  local function attachInterface(interface)
+    if not interface then return end
+    local persistent = interface:FindFirstChild("Persistent")
+    if persistent then attachPersistent(persistent) end
+
+    if playerCardInterfaceConn then
+      playerCardInterfaceConn:Disconnect()
+      playerCardInterfaceConn = nil
+    end
+    playerCardInterfaceConn = interface.ChildAdded:Connect(function(child)
+      if child.Name == "Persistent" then attachPersistent(child) end
+    end)
+  end
+
+  local playerGui = localPlayer2:FindFirstChildOfClass("PlayerGui") or localPlayer2:WaitForChild("PlayerGui", 10)
+  if not playerGui then return end
+
+  local interface = playerGui:FindFirstChild("Interface")
+  if interface then attachInterface(interface) end
+
+  -- The interface can load after the toggle is enabled, so keep watching for it.
+  playerCardGuiConn = playerGui.ChildAdded:Connect(function(child)
+    if child.Name == "Interface" then attachInterface(child) end
+  end)
 end
 
 _G.PlayerCard = {
@@ -3835,85 +4046,125 @@ do
 
   local function f59()
     v212 = {}
+    local seen = {}
     local Assets = replicatedStorage:FindFirstChild("Assets")
     local Ball = Assets and Assets:FindFirstChild("Ball")
 
     if Ball then
-      for index42, value49 in ipairs(Ball:GetChildren()) do
-        if value49:IsA("Model") then
-          table.insert(v212, value49.Name)
+      for _, asset in ipairs(Ball:GetChildren()) do
+        if asset:IsA("Model") and not seen[asset.Name] then
+          seen[asset.Name] = true
+          table.insert(v212, asset.Name)
+        end
+      end
+    end
+
+    -- Some games register ball cosmetics as inventory Item modules too.
+    local entities = replicatedStorage:FindFirstChild("Content")
+      and replicatedStorage.Content:FindFirstChild("Item")
+      and replicatedStorage.Content.Item:FindFirstChild("Entities")
+    if entities then
+      for _, module in ipairs(entities:GetChildren()) do
+        if module:IsA("ModuleScript") then
+          local okItem, itemData = pcall(require, module)
+          if okItem and type(itemData) == "table" and itemData.Type == "Ball"
+            and not seen[module.Name] then
+            seen[module.Name] = true
+            table.insert(v212, module.Name)
+          end
         end
       end
     end
 
     table.sort(v212)
-
     if #v212 == 0 then
       table.insert(v212, "ClassicBall")
       table.insert(v212, "ExtremeBall")
       table.insert(v212, "MediumBall")
     end
-
     return v212
   end
 
   local function f60()
     v210 = {}
-    local Entities = replicatedStorage.Content.Item.Entities
+    local seen = {}
+    local content = replicatedStorage:FindFirstChild("Content")
+    local itemFolder = content and content:FindFirstChild("Item")
+    local Entities = itemFolder and itemFolder:FindFirstChild("Entities")
 
     if Entities then
-      for index43, value50 in ipairs(Entities:GetChildren()) do
-        if value50:IsA("ModuleScript") then
-          local Name = value50.Name
-
-          if string.match(Name, "Card") or string.match(Name, "PlayerCard") then
-            table.insert(v210, Name)
+      for _, module in ipairs(Entities:GetChildren()) do
+        if module:IsA("ModuleScript") then
+          local okItem, itemData = pcall(require, module)
+          local itemName = module.Name
+          local isCard = string.match(itemName, "Card") ~= nil
+            or string.match(itemName, "PlayerCard") ~= nil
+            or (okItem and type(itemData) == "table"
+              and (itemData.Type == "PlayerCard" or itemData.Type == "Card"))
+          if isCard and not seen[itemName] then
+            seen[itemName] = true
+            table.insert(v210, itemName)
           end
         end
       end
     end
 
     table.sort(v210)
-
     if #v210 == 0 then
       table.insert(v210, "ContentCreatorPlayerCard")
       table.insert(v210, "UltimateChampionPlayerCard")
       table.insert(v210, "ProPlayerCard")
     end
-
     return v210
   end
 
   local function f61()
     v205 = {}
-    local ScoreEffect = replicatedStorage.Assets:FindFirstChild("ScoreEffect")
+    local seen = {}
+    local Assets = replicatedStorage:FindFirstChild("Assets")
+    local ScoreEffect = Assets and Assets:FindFirstChild("ScoreEffect")
 
     if ScoreEffect then
-      for index44, value51 in ipairs(ScoreEffect:GetChildren()) do
-        if value51:IsA("ModuleScript") then
-          table.insert(v205, value51.Name)
+      for _, asset in ipairs(ScoreEffect:GetChildren()) do
+        if asset:IsA("ModuleScript") and not seen[asset.Name] then
+          seen[asset.Name] = true
+          table.insert(v205, asset.Name)
         end
       end
     end
 
-    local Effects = replicatedStorage.Assets:FindFirstChild("Effects")
+    local Entities = replicatedStorage:FindFirstChild("Content")
+      and replicatedStorage.Content:FindFirstChild("Item")
+      and replicatedStorage.Content.Item:FindFirstChild("Entities")
+    if Entities then
+      for _, module in ipairs(Entities:GetChildren()) do
+        if module:IsA("ModuleScript") then
+          local okItem, itemData = pcall(require, module)
+          if okItem and type(itemData) == "table" and itemData.Type == "ScoreEffect"
+            and not seen[module.Name] then
+            seen[module.Name] = true
+            table.insert(v205, module.Name)
+          end
+        end
+      end
+    end
 
+    local Effects = Assets and Assets:FindFirstChild("Effects")
     if Effects then
-      for index45, value52 in ipairs({ "GroundHit1", "GroundHit2", "SupernovaScoreEffect" }) do
-        if Effects:FindFirstChild(value52) then
-          table.insert(v205, value52)
+      for _, name in ipairs({ "GroundHit1", "GroundHit2", "SupernovaScoreEffect" }) do
+        if Effects:FindFirstChild(name) and not seen[name] then
+          seen[name] = true
+          table.insert(v205, name)
         end
       end
     end
 
     table.sort(v205)
-
     if #v205 == 0 then
       table.insert(v205, "SupernovaScoreEffect")
       table.insert(v205, "GroundHit1")
       table.insert(v205, "GroundHit2")
     end
-
     return v205
   end
 
@@ -4415,15 +4666,21 @@ do
 
           if v255.enabled and type(v303) == "table"
             and (v303.Move == "Spike" or v303.Move == "ServeSpike") then
-            local steer = v255.steer
+            local steer = v255.enabled and v255.steer or nil
+            if typeof(steer) ~= "Vector3" and currentCamera2 then
+              steer = currentCamera2.CFrame.LookVector
+            end
 
             if typeof(steer) == "Vector3" then
               local Vector3_6 = Vector3.new(steer.X, 0, steer.Z)
 
               if Vector3_6.Magnitude > 0.01 then
                 local New_2 = (Vector3_6.Unit - Vector3.new(0, 0.35, 0)).Unit
-                v303.LookVector = New_2
-                v303.Direction = New_2
+                if v255.enabled then
+                  v303.LookVector = New_2
+                  v303.Direction = New_2
+                end
+
               end
             end
           end
@@ -7066,12 +7323,20 @@ function v440.install()
   end
 end
 
-v451 = { real = nil, want = {} }
+v451 = { real = nil, want = {}, selected = {}, selectedItems = {}, featureEnabled = {}, controlEnabled = false }
 
 function v451.mark(p185, p186)
-  v451.want[p185] = p186 or nil
+  -- The controlled inventory hides unselected cards, balls and score effects locally.
+  v451.featureEnabled = v451.featureEnabled or {}
+  v451.featureEnabled[p185] = p186 == true
+  v451.want = {}
+  for selectedType, selectedEnabled in pairs(v451.selected or {}) do
+    if selectedEnabled then
+      v451.want[selectedType] = true
+    end
+  end
 
-  if p186 then
+  if v451.controlEnabled == true or next(v451.want) ~= nil then
     v451.wear()
   end
 
@@ -7134,12 +7399,7 @@ function v451.mark(p185, p186)
           end
         end
 
-        local v463 = false
-        local v464, v465, v466 = pairs(v451.want)
-
-        if v464(v465, v466) then
-          v463 = true
-        end
+        local v463 = v451.controlEnabled == true or next(v451.want) ~= nil
 
         if not v463 then
           pcall(function() v456.Inventory:set(v451.real) end)
@@ -7162,19 +7422,74 @@ function v451.mark(p185, p186)
 
           v454 = {}
 
-          for key14, value93 in pairs(v451.real) do
-            v454[key14] = value93
+          local function itemType(itemName)
+            local itemModule = Entities_3:FindFirstChild(itemName)
+            if itemModule and itemModule:IsA("ModuleScript") then
+              local okItem, itemData = pcall(require, itemModule)
+              if okItem and type(itemData) == "table" then
+                return itemData.Type
+              end
+            end
+            return nil
           end
 
-          for index85, value94 in ipairs(Entities_3:GetChildren()) do
-            if value94:IsA("ModuleScript") and not v454[value94.Name] then
-              local v470, v471 = pcall(require, value94)
+          local controlledTypes = {
+            PlayerCard = true,
+            Card = true,
+            Ball = true,
+            ScoreEffect = true,
+          }
 
-              if v470 and type(v471) == "table" and v471.Type then
-                for key15 in pairs(v451.want) do
-                  if v471.Type == v468.Type[key15] then
-                    v454[value94.Name] = 1
-                    break
+          local function isControlledCosmetic(itemName)
+            -- First check the dropdown lists (this also covers ball assets that
+            -- are models rather than Item.Entity ModuleScripts).
+            for _, list in ipairs({ v210 or {}, v212 or {}, v205 or {}, v451.titleNames or {} }) do
+              for _, listedName in ipairs(list) do
+                if listedName == itemName then return true end
+              end
+            end
+            -- Then classify by the actual inventory Item module type. This
+            -- catches score effects/cards omitted from the old dropdown lists.
+            local kind = itemType(itemName)
+            if kind and controlledTypes[kind] == true then return true end
+            -- Fallback for cosmetic inventory entries whose Item module is
+            -- missing or uses a nonstandard Type field.
+            local lowered = string.lower(tostring(itemName))
+            return string.find(lowered, "playercard", 1, true) ~= nil
+              or string.find(lowered, "card", 1, true) ~= nil
+              or string.find(lowered, "ball", 1, true) ~= nil
+              or string.find(lowered, "scoreeffect", 1, true) ~= nil
+              or string.find(lowered, "groundhit", 1, true) ~= nil
+              or string.find(lowered, "title", 1, true) ~= nil
+          end
+
+          for key14, value93 in pairs(v451.real) do
+            if v451.controlEnabled ~= true or not isControlledCosmetic(key14)
+              or (v451.selectedItems and v451.selectedItems[key14]) then
+              v454[key14] = value93
+            end
+          end
+
+          if v451.controlEnabled == true then
+            -- Explicitly add every selected item, including Ball models that
+            -- do not have a matching ModuleScript under Content.Item.Entities.
+            for itemName, enabled in pairs(v451.selectedItems or {}) do
+              if enabled then
+                v454[itemName] = (v451.real and v451.real[itemName]) or 1
+              end
+            end
+          else
+            -- Preserve the pre-existing visual unlock behavior when the
+            -- separate legacy changer toggles are used.
+            for index85, value94 in ipairs(Entities_3:GetChildren()) do
+              if value94:IsA("ModuleScript") and not v454[value94.Name] then
+                local v470, v471 = pcall(require, value94)
+                if v470 and type(v471) == "table" and v471.Type then
+                  for key15 in pairs(v451.want) do
+                    if v471.Type == v468.Type[key15] then
+                      v454[value94.Name] = 1
+                      break
+                    end
                   end
                 end
               end
@@ -7190,20 +7505,30 @@ function v451.mark(p185, p186)
 end
 
 function v451.typeOf(p187)
-  local Entities_4 = replicatedStorage.Content.Item:FindFirstChild("Entities")
-  local Child_2 = Entities_4 and Entities_4:FindFirstChild(p187)
-
-  if not Child_2 then
-    return nil
-  else
-    local v472, v473 = pcall(require, Child_2)
-
-    if v472 and type(v473) == "table" and v473.Type then
-      return v473.Type, v473
+  local content = replicatedStorage:FindFirstChild("Content")
+  local itemFolder = content and content:FindFirstChild("Item")
+  local entities = itemFolder and itemFolder:FindFirstChild("Entities")
+  local child = entities and entities:FindFirstChild(p187)
+  if child and child:IsA("ModuleScript") then
+    local okItem, itemData = pcall(require, child)
+    if okItem and type(itemData) == "table" and itemData.Type then
+      return itemData.Type, itemData
     end
-
-    return nil
   end
+  -- Asset-only cosmetics don't always have an Item.Entity module.
+  for _, name in ipairs(v210 or {}) do
+    if name == p187 then return "PlayerCard", { DisplayName = p187 } end
+  end
+  for _, name in ipairs(v205 or {}) do
+    if name == p187 then return "ScoreEffect", { DisplayName = p187 } end
+  end
+  for _, name in ipairs(v212 or {}) do
+    if name == p187 then return "Ball", { DisplayName = p187 } end
+  end
+  for _, name in ipairs(v451.titleNames or {}) do
+    if name == p187 then return "Title", { DisplayName = p187 } end
+  end
+  return nil
 end
 
 function v451.paint(p188, p189, p190)
@@ -7232,30 +7557,40 @@ function v451.paint(p188, p189, p190)
 end
 
 function v451.setSlot(p191, p192)
-  local v474, v475 = pcall(require, replicatedStorage.Packages.Knit)
-  local v476
+  -- Visual-only equip: update the local Equipped store so the UI/game client
+  -- reacts to the selected cosmetic without claiming ownership on the server.
+  local okKnit, Knit = pcall(require, replicatedStorage.Packages.Knit)
+  if not okKnit or not Knit then return false end
 
-  if not v474 then
-    return
-  else
-    local v477
-    v477, v476 = pcall(v475.GetController, "InventoryController")
-
-    if not v477 or type(v476) ~= "table" or not v476.Equipped then
-      return
-    else
-      local v478, v479 = pcall(function() return v476.Equipped:get() end)
-
-      if not v478 or type(v479) ~= "table" then
-        return
-      end
-
-      for key16, value95 in pairs(v479) do
-      end
-
-      return
-    end
+  local okController, inventoryController = pcall(Knit.GetController, "InventoryController")
+  if not okController or type(inventoryController) ~= "table" or not inventoryController.Equipped then
+    return false
   end
+
+  local okEquipped, currentEquipped = pcall(function()
+    return inventoryController.Equipped:get()
+  end)
+  if not okEquipped or type(currentEquipped) ~= "table" then return false end
+
+  local updatedEquipped = {}
+  for key, value in pairs(currentEquipped) do
+    updatedEquipped[key] = value
+  end
+
+  if p192 == nil or p192 == false or p192 == "" then
+    updatedEquipped[p191] = nil
+  else
+    updatedEquipped[p191] = p192
+  end
+
+  local okSet = pcall(function()
+    inventoryController.Equipped:set(updatedEquipped)
+  end)
+  if not okSet then return false end
+
+  -- Keep v451.realEquipped unchanged: it stores the player's original items
+  -- so the visual spoof can be reverted cleanly when the toggle is disabled.
+  return true
 end
 
 function v451.currentSlot(p193)
@@ -7809,6 +8144,9 @@ do
           if Facing and Facing.Magnitude > 0 then
             v255.steer = Facing
 
+            -- O tilt e aplicado no instante do spike, nao no salto,
+            -- para evitar que uma chamada antecipada sobrescreva a selecao.
+
             if v201 or v255.enabled then
               HumanoidRootPart_12.CFrame = CFrame.lookAt(HumanoidRootPart_12.Position, HumanoidRootPart_12.Position
                 + Facing.Unit)
@@ -8119,6 +8457,34 @@ LOCOPANI_RAY_WINDOW = Rayfield:CreateWindow({
   sidebarLayout = true,
 })
 
+-- Corrige falhas raras de cálculo de layout no primeiro carregamento (texto estreito/empilhado).
+-- Reaplica o texto após a interface terminar de montar e recalcula os TextLabels envolvidos.
+task.spawn(function()
+  local RunService = game:GetService("RunService")
+  for _, delayFrames in ipairs({1, 3, 8}) do
+    for _ = 1, delayFrames do RunService.Heartbeat:Wait() end
+    pcall(function()
+      local containers = {game:GetService("CoreGui"), game:GetService("Players").LocalPlayer:FindFirstChildOfClass("PlayerGui")}
+      for _, container in ipairs(containers) do
+        if container then
+          for _, gui in ipairs(container:GetChildren()) do
+            if gui:IsA("ScreenGui") and (gui.Name:lower():find("rayfield") or gui.Name:lower():find("sirius")) then
+              for _, obj in ipairs(gui:GetDescendants()) do
+                if obj:IsA("TextLabel") and obj.Visible and obj.Text ~= "" and obj.TextWrapped then
+                  local oldText = obj.Text
+                  obj.Text = " "
+                  RunService.Heartbeat:Wait()
+                  if obj.Parent then obj.Text = oldText end
+                end
+              end
+            end
+          end
+        end
+      end
+    end)
+  end
+end)
+
 -- Main menu visibility key: RightShift. Handle it directly against the Gen2 window.
 local UserInputService = game:GetService("UserInputService")
 local function LOCOPANI_SetRayfieldVisibility(visible)
@@ -8167,14 +8533,73 @@ pcall(function()
   if LOCOPANIHUBWindow.Instance then LOCOPANIHUBWindow.Instance.Visible = false end
 end)
 
+-- Updates e criada primeiro para aparecer como a primeira categoria da UI principal.
 local LOCOPANI_RAY_TABS = {
+  Updates = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Updates" }),
   Main = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Main" }),
   Character = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Character" }),
   Visuals = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Visuals" }),
+  ["Inventário Controlado"] = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Inventário Controlado" }),
   Misc = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Misc" }),
   GameJoin = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Game Join" }),
   ["UI Settings"] = LOCOPANI_RAY_WINDOW:CreateTab({ name = "UI Settings" }),
 }
+
+-- Changelog isolado em um bloco proprio para liberar registradores locais.
+do
+  local history = {
+    {
+      date = "20/10/2026",
+      title = "Update ocorrida",
+      changes = {
+        "Bug fixes",
+        "Level Changer",
+      },
+    },
+    {
+      date = "20/10/2026",
+      title = "ScoreEffect Changer",
+      changes = {
+        "Corrigido o equipamento visual local dos ScoreEffects.",
+        "Atualizado o estado local de equipamento para aplicar o efeito visual.",
+      },
+    },
+    {
+      date = "20/10/2026",
+      title = "Visual Level",
+      changes = {
+        "Corrigida a exibicao do nivel acima do personagem.",
+        "Melhorada a atualizacao do BillboardGui do personagem.",
+      },
+    },
+    {
+      date = "18/10/2026",
+      title = "Linkvertise Key System",
+      changes = {
+        "Corrigida a validacao de respostas JSON e texto simples do Linkvertise Anti-Bypass.",
+        "Respostas JSON validas com status true passaram a ser reconhecidas corretamente.",
+      },
+    },
+  }
+
+  -- Erros no conteudo do changelog nao devem impedir a inicializacao do hub.
+  pcall(function()
+    local updatesTab = LOCOPANI_RAY_TABS.Updates
+    if not updatesTab then return end
+    updatesTab:CreateSection({ name = "Historico de atualizacoes" })
+    for _, update in ipairs(history) do
+      updatesTab:CreateSection({ name = update.date .. " - " .. update.title })
+      for _, change in ipairs(update.changes) do
+        updatesTab:CreateParagraph({ Title = "Update ocorrida", Content = "- " .. change })
+      end
+    end
+    updatesTab:CreateSection({ name = "Como adicionar uma update" })
+    updatesTab:CreateParagraph({
+      Title = "Dica",
+      Content = "Adicione novas entradas a tabela history neste bloco, com data, titulo e lista de mudancas.",
+    })
+  end)
+end
 
 local function LOCOPANI_RayControl(kind, tab, name, cfg, callback)
   cfg = cfg or {}
@@ -8186,7 +8611,7 @@ local function LOCOPANI_RayControl(kind, tab, name, cfg, callback)
     for _, fn in ipairs(handle._callbacks) do task.spawn(fn, value) end
   end
   local h
-  local common = { name = title, description = cfg.Tooltip }
+  local common = { name = title }
   if kind == "Toggle" then
     common.value = cfg.Default == true
     common.callback = onValue
@@ -8203,6 +8628,14 @@ local function LOCOPANI_RayControl(kind, tab, name, cfg, callback)
   elseif kind == "Dropdown" then
     common.options = cfg.Values or {}
     common.value = cfg.Default
+    -- Rayfield Gen2 forks use different names for the multiselect option.
+    -- Forward the common variants; the callback below also normalizes either
+    -- a table of selections or the single item returned by older dropdowns.
+    common.multiselect = cfg.Multi == true
+    common.multiSelect = cfg.Multi == true
+    common.multiple = cfg.Multi == true
+    common.allowMultiple = cfg.Multi == true
+    common.Multi = cfg.Multi == true
     common.callback = onValue
     h = tab:CreateDropdown(common)
   elseif kind == "Input" or kind == "TextBox" then
@@ -8234,8 +8667,23 @@ local function LOCOPANI_RayControl(kind, tab, name, cfg, callback)
   end
   function handle:GetValue() return self.Value end
   function handle:SetValues(values)
-    self.Values = values
-    if self._control and self._control.SetOptions then pcall(function() self._control:SetOptions(values) end) end
+    self.Values = values or {}
+    local control = self._control
+    if not control then return end
+    -- Rayfield forks expose different names for updating dropdown options.
+    local updated = false
+    for _, methodName in ipairs({"SetOptions", "Refresh", "SetValues", "UpdateOptions"}) do
+      local method = control[methodName]
+      if type(method) == "function" then
+        local ok = pcall(method, control, self.Values)
+        if ok then updated = true; break end
+      end
+    end
+    -- Keep common internal option fields in sync for forks that read these directly.
+    pcall(function() control.Options = self.Values end)
+    pcall(function() control.options = self.Values end)
+    pcall(function() control.Values = self.Values end)
+    return updated
   end
   function handle:OnChanged(fn) table.insert(self._callbacks, fn); return self end
   function handle:SetText(value)
@@ -8974,6 +9422,535 @@ v545.Visuals:AddRightGroupbox("Ball Prediction"):AddToggle("ballmarker", {
   end,
 })
 
+-- Visual-only level override: changes local PlayerGui text only, never server data.
+LOCOPANI_VisualLevel = {
+  Enabled = false,
+  Value = "1000",
+  Records = {},
+  AddedConn = nil,
+  CharacterConn = nil,
+  CharacterAddedConn = nil,
+}
+
+function LOCOPANI_VisualLevel:IsLevelLabel(label)
+  if not label or not (label:IsA("TextLabel") or label:IsA("TextButton")) then
+    return false
+  end
+  local name = string.lower(tostring(label.Name or ""))
+  local currentText = tostring(label.Text or "")
+  local lowerText = string.lower(currentText)
+  -- Never treat streak/win-streak UI as a level, even when nested under a shared BillboardGui.
+  if string.find(name, "streak", 1, true) or string.find(name, "win", 1, true) and string.find(name, "streak", 1, true) or
+    string.find(lowerText, "streak", 1, true) then
+    return false
+  end
+  local namedAsLevel = string.find(name, "level", 1, true) or string.find(name, "lvl", 1, true)
+  local textHasLevel = string.find(lowerText, "level", 1, true) or
+    string.find(lowerText, "lvl", 1, true) or
+    string.find(lowerText, "lv.", 1, true) or
+    string.match(lowerText, "^%s*lv%s*%d+")
+  local isJustNumber = string.match(currentText, "^%s*%d+%s*$") ~= nil
+
+  -- Inspeciona os nomes dos ancestrais para localizar labels que realmente
+  -- representam level. Nao classifica todo numero de um BillboardGui como level,
+  -- pois ali tambem podem aparecer streaks e outras estatisticas.
+  local ancestor = label.Parent
+  local ancestorHintsLevel = false
+  while ancestor do
+    local ancestorName = string.lower(tostring(ancestor.Name or ""))
+    if string.find(ancestorName, "streak", 1, true) then
+      return false
+    end
+    if string.find(ancestorName, "level", 1, true) or string.find(ancestorName, "lvl", 1, true) then
+      ancestorHintsLevel = true
+    end
+    ancestor = ancestor.Parent
+  end
+
+  -- Do not infer that a numeric label is a level merely because a shared parent
+  -- contains the word "level"; this is what can accidentally capture the streak.
+  return namedAsLevel ~= nil or textHasLevel ~= nil or
+    (isJustNumber and string.find(name, "exp", 1, true) ~= nil)
+end
+
+function LOCOPANI_VisualLevel:MakeSpoofedText(label, sourceText)
+  local desired = tostring(math.max(0, math.floor(tonumber(self.Value) or 1000)))
+  local original = tostring(sourceText or "")
+  local lower = string.lower(original)
+  if string.match(original, "^%s*%d+%s*$") and
+    (string.find(string.lower(label.Name), "level", 1, true) or string.find(string.lower(label.Name), "lvl", 1, true)) then
+    return string.gsub(original, "%d+", desired, 1)
+  end
+  if string.find(lower, "level", 1, true) or string.find(lower, "lvl", 1, true) or string.find(lower, "lv.", 1, true) or string.match(lower, "^%s*lv%s*%d+") then
+    local replaced, count = string.gsub(original, "%d+", desired, 1)
+    if count > 0 then return replaced end
+  end
+  return nil
+end
+
+function LOCOPANI_VisualLevel:Watch(label)
+  if not self.Enabled or not self:IsLevelLabel(label) then return end
+  if self.Records[label] then
+    local record = self.Records[label]
+    if record.busy then return end
+    local nowText = tostring(label.Text or "")
+    if nowText ~= record.spoofed then
+      record.original = nowText
+      local spoofed = self:MakeSpoofedText(label, record.original)
+      if spoofed then
+        record.spoofed = spoofed
+        record.busy = true
+        label.Text = spoofed
+        record.busy = false
+      end
+    end
+    return
+  end
+
+  local original = tostring(label.Text or "")
+  local spoofed = self:MakeSpoofedText(label, original)
+  if not spoofed then return end
+  local record = { original = original, spoofed = spoofed, busy = true, connection = nil }
+  self.Records[label] = record
+  label.Text = spoofed
+  record.busy = false
+  record.connection = label:GetPropertyChangedSignal("Text"):Connect(function()
+    if not self.Enabled or record.busy or not label.Parent then return end
+    local current = tostring(label.Text or "")
+    if current == record.spoofed then return end
+    record.original = current
+    local updated = self:MakeSpoofedText(label, record.original)
+    if updated then
+      record.spoofed = updated
+      record.busy = true
+      label.Text = updated
+      record.busy = false
+    end
+  end)
+end
+
+function LOCOPANI_VisualLevel:WatchContainer(container)
+  if not container then return end
+  for _, item in ipairs(container:GetDescendants()) do
+    if item:IsA("TextLabel") or item:IsA("TextButton") then
+      self:Watch(item)
+    end
+  end
+  if container:IsA("Model") and container:FindFirstChildOfClass("Humanoid") then
+    -- The level over the character is normally in a BillboardGui under the
+    -- character/head, outside PlayerGui. Only scan the local character.
+    for _, item in ipairs(container:GetDescendants()) do
+      if item:IsA("BillboardGui") then
+        for _, guiItem in ipairs(item:GetDescendants()) do
+          if guiItem:IsA("TextLabel") or guiItem:IsA("TextButton") then
+            self:Watch(guiItem)
+          end
+        end
+      end
+    end
+  end
+end
+
+function LOCOPANI_VisualLevel:Apply()
+  if not self.Enabled then return end
+  local player = localPlayer2 or game:GetService("Players").LocalPlayer
+  if not player then return end
+  local playerGui = player:FindFirstChildOfClass("PlayerGui")
+  if playerGui then
+    self:WatchContainer(playerGui)
+    if not self.AddedConn then
+      self.AddedConn = playerGui.DescendantAdded:Connect(function(item)
+        if self.Enabled and (item:IsA("TextLabel") or item:IsA("TextButton")) then
+          task.defer(function() self:Watch(item) end)
+        end
+      end)
+    end
+  end
+
+  local function bindCharacter(character)
+    if not self.Enabled or not character then return end
+    if self.CharacterConn then
+      self.CharacterConn:Disconnect()
+      self.CharacterConn = nil
+    end
+    self:WatchContainer(character)
+    self.CharacterConn = character.DescendantAdded:Connect(function(item)
+      if self.Enabled and (item:IsA("TextLabel") or item:IsA("TextButton")) then
+        task.defer(function() self:Watch(item) end)
+      elseif self.Enabled and item:IsA("BillboardGui") then
+        task.defer(function() self:WatchContainer(item) end)
+      end
+    end)
+  end
+
+  if player.Character then bindCharacter(player.Character) end
+  if not self.CharacterAddedConn then
+    self.CharacterAddedConn = player.CharacterAdded:Connect(function(character)
+      task.defer(function() bindCharacter(character) end)
+    end)
+  end
+end
+
+function LOCOPANI_VisualLevel:SetEnabled(enabled)
+  self.Enabled = enabled == true
+  if self.Enabled then
+    self:Apply()
+    return
+  end
+  if self.AddedConn then
+    self.AddedConn:Disconnect()
+    self.AddedConn = nil
+  end
+  if self.CharacterConn then
+    self.CharacterConn:Disconnect()
+    self.CharacterConn = nil
+  end
+  if self.CharacterAddedConn then
+    self.CharacterAddedConn:Disconnect()
+    self.CharacterAddedConn = nil
+  end
+  for label, record in pairs(self.Records) do
+    if record.connection then record.connection:Disconnect() end
+    if label and label.Parent then
+      record.busy = true
+      label.Text = record.original
+      record.busy = false
+    end
+    self.Records[label] = nil
+  end
+end
+
+
+-- Independent visual streak override; it cannot modify level text or game data.
+LOCOPANI_VisualStreak = {
+  Enabled = false,
+  Value = "0",
+  Records = {},
+  AddedConn = nil,
+  CharacterConn = nil,
+  CharacterAddedConn = nil,
+}
+
+function LOCOPANI_VisualStreak:IsStreakLabel(label)
+  if not label or not (label:IsA("TextLabel") or label:IsA("TextButton")) then
+    return false
+  end
+  local name = string.lower(tostring(label.Name or ""))
+  local currentText = tostring(label.Text or "")
+  local lowerText = string.lower(currentText)
+  local namedAsStreak = string.find(name, "streak", 1, true) or string.find(name, "win", 1, true) and string.find(name, "series", 1, true)
+  local textHasStreak = string.find(lowerText, "streak", 1, true) or
+    string.find(lowerText, "win streak", 1, true) or
+    string.match(lowerText, "^%s*st%s*[:%.%-]?%s*%d+")
+  -- Neste jogo o streak do overhead pode aparecer apenas como um icone de fogo
+  -- seguido do numero (ex.: 🔥6767), sem a palavra "streak" no nome/texto.
+  local hasFireIcon = string.find(currentText, "🔥", 1, true) ~= nil
+  local isJustNumber = string.match(currentText, "^%s*%d+%s*$") ~= nil
+
+  -- Detecta labels pelo nome e contexto dos ancestrais.
+  local ancestor = label.Parent
+  local ancestorHintsStreak = false
+  local insideBillboard = false
+  local insideCharacterModel = false
+  local player = localPlayer2 or game:GetService("Players").LocalPlayer
+  while ancestor do
+    local ancestorName = string.lower(tostring(ancestor.Name or ""))
+    if string.find(ancestorName, "streak", 1, true) or string.find(ancestorName, "winstreak", 1, true) then
+      ancestorHintsStreak = true
+    end
+    if ancestor:IsA("BillboardGui") then
+      insideBillboard = true
+    end
+    if ancestor:IsA("Model") and ancestor:FindFirstChildOfClass("Humanoid") then
+      insideCharacterModel = true
+      break
+    end
+    ancestor = ancestor.Parent
+  end
+
+  -- No overhead mostrado pelo LOCOPANI, o fogo é um ícone separado e o
+  -- streak é apenas um número ("4"). O nível fica em outro label ("Lvl 232 - ..."),
+  -- portanto só aceita número isolado no BillboardGui do personagem local.
+  local isLocalCharacter = player and player.Character and label:IsDescendantOf(player.Character)
+  local numericOverheadStreak = isJustNumber and insideBillboard and insideCharacterModel and isLocalCharacter
+
+  return namedAsStreak ~= nil or textHasStreak ~= nil or ancestorHintsStreak or hasFireIcon or numericOverheadStreak
+end
+
+function LOCOPANI_VisualStreak:MakeSpoofedText(label, sourceText)
+  local desired = tostring(math.max(0, math.floor(tonumber(self.Value) or 1000)))
+  local original = tostring(sourceText or "")
+  local lower = string.lower(original)
+  -- IsStreakLabel já validou o contexto antes de chegar aqui; número isolado
+  -- nesse label é o streak do overhead.
+  if string.match(original, "^%s*%d+%s*$") then
+    return string.gsub(original, "%d+", desired, 1)
+  end
+  -- Altera somente o numero de labels identificados como streak, inclusive o
+  -- formato visual de fogo + numero usado no overhead do personagem.
+  if string.find(lower, "streak", 1, true) or string.find(lower, "win streak", 1, true) or
+    string.match(lower, "^%s*st%s*[:%.%-]?%s*%d+") or string.find(original, "🔥", 1, true) then
+    local replaced, count = string.gsub(original, "%d+", desired, 1)
+    if count > 0 then return replaced end
+  end
+  return nil
+end
+
+function LOCOPANI_VisualStreak:Watch(label)
+  if not self.Enabled or not self:IsStreakLabel(label) then return end
+  if self.Records[label] then
+    local record = self.Records[label]
+    if record.busy then return end
+    local nowText = tostring(label.Text or "")
+    if nowText ~= record.spoofed then
+      record.original = nowText
+      local spoofed = self:MakeSpoofedText(label, record.original)
+      if spoofed then
+        record.spoofed = spoofed
+        record.busy = true
+        label.Text = spoofed
+        record.busy = false
+      end
+    end
+    return
+  end
+
+  local original = tostring(label.Text or "")
+  local spoofed = self:MakeSpoofedText(label, original)
+  if not spoofed then return end
+  local record = { original = original, spoofed = spoofed, busy = true, connection = nil }
+  self.Records[label] = record
+  label.Text = spoofed
+  record.busy = false
+  record.connection = label:GetPropertyChangedSignal("Text"):Connect(function()
+    if not self.Enabled or record.busy or not label.Parent then return end
+    local current = tostring(label.Text or "")
+    if current == record.spoofed then return end
+    record.original = current
+    local updated = self:MakeSpoofedText(label, record.original)
+    if updated then
+      record.spoofed = updated
+      record.busy = true
+      label.Text = updated
+      record.busy = false
+    end
+  end)
+end
+
+function LOCOPANI_VisualStreak:WatchContainer(container)
+  if not container then return end
+  for _, item in ipairs(container:GetDescendants()) do
+    if item:IsA("TextLabel") or item:IsA("TextButton") then
+      self:Watch(item)
+    end
+  end
+  if container:IsA("Model") and container:FindFirstChildOfClass("Humanoid") then
+    -- The streak over the character is normally in a BillboardGui under the
+    -- character/head, outside PlayerGui. Only scan the local character.
+    for _, item in ipairs(container:GetDescendants()) do
+      if item:IsA("BillboardGui") then
+        for _, guiItem in ipairs(item:GetDescendants()) do
+          if guiItem:IsA("TextLabel") or guiItem:IsA("TextButton") then
+            self:Watch(guiItem)
+          end
+        end
+      end
+    end
+  end
+end
+
+function LOCOPANI_VisualStreak:Apply()
+  if not self.Enabled then return end
+  local player = localPlayer2 or game:GetService("Players").LocalPlayer
+  if not player then return end
+  local playerGui = player:FindFirstChildOfClass("PlayerGui")
+  if playerGui then
+    self:WatchContainer(playerGui)
+    if not self.AddedConn then
+      self.AddedConn = playerGui.DescendantAdded:Connect(function(item)
+        if self.Enabled and (item:IsA("TextLabel") or item:IsA("TextButton")) then
+          task.defer(function() self:Watch(item) end)
+        end
+      end)
+    end
+  end
+
+  local function bindCharacter(character)
+    if not self.Enabled or not character then return end
+    if self.CharacterConn then
+      self.CharacterConn:Disconnect()
+      self.CharacterConn = nil
+    end
+    self:WatchContainer(character)
+    self.CharacterConn = character.DescendantAdded:Connect(function(item)
+      if self.Enabled and (item:IsA("TextLabel") or item:IsA("TextButton")) then
+        task.defer(function() self:Watch(item) end)
+      elseif self.Enabled and item:IsA("BillboardGui") then
+        task.defer(function() self:WatchContainer(item) end)
+      end
+    end)
+  end
+
+  if player.Character then bindCharacter(player.Character) end
+  if not self.CharacterAddedConn then
+    self.CharacterAddedConn = player.CharacterAdded:Connect(function(character)
+      task.defer(function() bindCharacter(character) end)
+    end)
+  end
+end
+
+function LOCOPANI_VisualStreak:SetEnabled(enabled)
+  self.Enabled = enabled == true
+  if self.Enabled then
+    self:Apply()
+    return
+  end
+  if self.AddedConn then
+    self.AddedConn:Disconnect()
+    self.AddedConn = nil
+  end
+  if self.CharacterConn then
+    self.CharacterConn:Disconnect()
+    self.CharacterConn = nil
+  end
+  if self.CharacterAddedConn then
+    self.CharacterAddedConn:Disconnect()
+    self.CharacterAddedConn = nil
+  end
+  for label, record in pairs(self.Records) do
+    if record.connection then record.connection:Disconnect() end
+    if label and label.Parent then
+      record.busy = true
+      label.Text = record.original
+      record.busy = false
+    end
+    self.Records[label] = nil
+  end
+end
+
+
+-- Inventário Controlado: selections are tracked independently for each category.
+-- Works with native table-based multiselect dropdowns and older single-value dropdown callbacks.
+do
+  local inventoryControlGroup = v545["Inventário Controlado"]:AddLeftGroupbox("Controle do Inventário")
+  -- Build title choices from the game's Item definitions.
+  v451.titleNames = {}
+  do
+    local content = replicatedStorage:FindFirstChild("Content")
+    local itemFolder = content and content:FindFirstChild("Item")
+    local entities = itemFolder and itemFolder:FindFirstChild("Entities")
+    local seenTitles = {}
+    if entities then
+      for _, module in ipairs(entities:GetChildren()) do
+        if module:IsA("ModuleScript") then
+          local okItem, itemData = pcall(require, module)
+          if okItem and type(itemData) == "table" and itemData.Type == "Title" and not seenTitles[module.Name] then
+            seenTitles[module.Name] = true
+            table.insert(v451.titleNames, module.Name)
+          end
+        end
+      end
+    end
+    table.sort(v451.titleNames)
+  end
+  v451.controlSelections = v451.controlSelections or {
+    Cards = {},
+    Balls = {},
+    ScoreEffects = {},
+    Titles = {},
+  }
+
+  local function rebuildSelectedItems()
+    v451.selectedItems = {}
+    for _, category in pairs(v451.controlSelections) do
+      for itemName, enabled in pairs(category) do
+        if enabled then v451.selectedItems[itemName] = true end
+      end
+    end
+  end
+
+  local function applySelection(categoryName, selected, validNames)
+    local current = v451.controlSelections[categoryName] or {}
+    local valid = {}
+    for _, itemName in ipairs(validNames or {}) do valid[itemName] = true end
+
+    if type(selected) == "table" then
+      local nextSelection = {}
+      -- Accept either { [name] = true } or an array { "name1", "name2" }.
+      for key, value in pairs(selected) do
+        if type(key) == "number" and type(value) == "string" then
+          if valid[value] then nextSelection[value] = true end
+        elseif type(key) == "string" and value == true and valid[key] then
+          nextSelection[key] = true
+        end
+      end
+      v451.controlSelections[categoryName] = nextSelection
+    elseif type(selected) == "string" and valid[selected] then
+      -- Fallback for Gen2 dropdowns that still return only one string:
+      -- each choice toggles that item while preserving previous selections.
+      current[selected] = not current[selected] or nil
+      v451.controlSelections[categoryName] = current
+    end
+
+    rebuildSelectedItems()
+    v451.mark("ControlledInventorySelection", false)
+  end
+
+  inventoryControlGroup:AddToggle("controlledinventoryenabled", {
+    Text = "Ativar inventário controlado",
+    Tooltip = "Quando ativado, só aparecem os Cards, Balls e Score Effects escolhidos nos menus abaixo.",
+    Default = false,
+    Callback = function(enabled)
+      v451.controlEnabled = enabled == true
+      v451.mark("ControlledInventory", enabled == true)
+    end,
+  })
+
+  local storeGroupCard = v545["Inventário Controlado"]:AddLeftGroupbox("Card Changer")
+  storeGroupCard:AddDropdown("storescamcards", {
+    Values = v210,
+    Default = {},
+    Multi = true,
+    Text = "Cards que aparecem no inventário",
+    Callback = function(selected)
+      applySelection("Cards", selected, v210)
+    end,
+  })
+
+  local storeGroupBall = v545["Inventário Controlado"]:AddRightGroupbox("Ball Changer")
+  storeGroupBall:AddDropdown("storescamballs", {
+    Values = v212,
+    Default = {},
+    Multi = true,
+    Text = "Bolas que aparecem no inventário",
+    Callback = function(selected)
+      applySelection("Balls", selected, v212)
+    end,
+  })
+
+  local storeGroupScore = v545["Inventário Controlado"]:AddLeftGroupbox("Score Effect Changer")
+  storeGroupScore:AddDropdown("storescamscoreeffects", {
+    Values = v205,
+    Default = {},
+    Multi = true,
+    Text = "Score Effects que aparecem no inventário",
+    Callback = function(selected)
+      applySelection("ScoreEffects", selected, v205)
+    end,
+  })
+
+  local storeGroupTitle = v545["Inventário Controlado"]:AddRightGroupbox("Title Changer")
+  storeGroupTitle:AddDropdown("storescamtitles", {
+    Values = v451.titleNames,
+    Default = {},
+    Multi = true,
+    Text = "Titles que aparecem no inventário",
+    Callback = function(selected)
+      applySelection("Titles", selected, v451.titleNames)
+    end,
+  })
+end
+
 v546.VisualScoreGroup = v545.Visuals:AddLeftGroupbox("Score Effect")
 
 v546.VisualScoreGroup:AddDropdown("effectselect", {
@@ -9112,6 +10089,14 @@ v546.PlayerCardGroup:AddToggle("playercard", {
   Callback = function(value159)
     v206 = value159
 
+    -- Add/remove PlayerCard items in the local inventory view while enabled.
+    -- This is client-side only; it does not grant server-side ownership.
+    pcall(function()
+      if v451 and v451.mark then
+        v451.mark("PlayerCard", value159)
+      end
+    end)
+
     if value159 then
       f58()
     elseif not v238.CardEnabled then
@@ -9181,6 +10166,86 @@ v546.BallSkinGroup:AddToggle("randomball", {
   Tooltip = "Pick random ball when ball spawns",
   Default = false,
   Callback = function(value164) v238.BallEnabled = value164 end,
+})
+
+v546.VisualLevelGroup = v545.Visuals:AddRightGroupbox("Visual Level")
+
+v546.VisualLevelGroup:AddInput("visuallevelvalue", {
+  Default = "1000",
+  Text = "Displayed Level",
+  Placeholder = "1000",
+  Callback = function(value167)
+    local numeric = tonumber(value167)
+    if numeric and numeric >= 0 then
+      LOCOPANI_VisualLevel.Value = tostring(math.floor(numeric))
+      if LOCOPANI_VisualLevel.Enabled then
+        LOCOPANI_VisualLevel:SetEnabled(false)
+        LOCOPANI_VisualLevel:SetEnabled(true)
+      end
+    end
+  end,
+})
+
+v546.VisualLevelGroup:AddToggle("visuallevel", {
+  Text = "Change Level (Visual Only)",
+  Tooltip = "Changes level text locally in your interface only; it does not change the real account level.",
+  Default = false,
+  Callback = function(value168)
+    LOCOPANI_VisualLevel:SetEnabled(value168)
+    v174:Notify(value168 and ("Visual level set to " .. LOCOPANI_VisualLevel.Value) or "Visual level disabled")
+  end,
+})
+
+v546.VisualLevelGroup:AddButton({
+  Text = "Apply Visual Level",
+  Func = function()
+    if LOCOPANI_VisualLevel.Enabled then
+      LOCOPANI_VisualLevel:SetEnabled(false)
+      LOCOPANI_VisualLevel:SetEnabled(true)
+      v174:Notify("Visual level applied: " .. LOCOPANI_VisualLevel.Value)
+    else
+      v174:Notify("Enable Change Level (Visual Only) first")
+    end
+  end,
+})
+
+v546.VisualLevelGroup:AddInput("visualstreakvalue", {
+  Default = "0",
+  Text = "Displayed Streak",
+  Placeholder = "0",
+  Callback = function(value)
+    local numeric = tonumber(value)
+    if numeric and numeric >= 0 then
+      LOCOPANI_VisualStreak.Value = tostring(math.floor(numeric))
+      if LOCOPANI_VisualStreak.Enabled then
+        LOCOPANI_VisualStreak:SetEnabled(false)
+        LOCOPANI_VisualStreak:SetEnabled(true)
+      end
+    end
+  end,
+})
+
+v546.VisualLevelGroup:AddToggle("visualstreak", {
+  Text = "Streak Change (Visual Only)",
+  Tooltip = "Changes streak text locally only; it does not change real wins or level.",
+  Default = false,
+  Callback = function(value)
+    LOCOPANI_VisualStreak:SetEnabled(value)
+    v174:Notify(value and ("Visual streak set to " .. LOCOPANI_VisualStreak.Value) or "Visual streak disabled")
+  end,
+})
+
+v546.VisualLevelGroup:AddButton({
+  Text = "Apply Visual Streak",
+  Func = function()
+    if LOCOPANI_VisualStreak.Enabled then
+      LOCOPANI_VisualStreak:SetEnabled(false)
+      LOCOPANI_VisualStreak:SetEnabled(true)
+      v174:Notify("Visual streak applied: " .. LOCOPANI_VisualStreak.Value)
+    else
+      v174:Notify("Enable Streak Change (Visual Only) first")
+    end
+  end,
 })
 
 v546.JerseyGroup = v545.Visuals:AddRightGroupbox("Jersey Changer")
@@ -9583,135 +10648,278 @@ do
   v174.ToggleKeybind = options.MenuKeybind
 end
 
+
+-- LOCOPANI CONFIG UI (Rayfield Gen2)
+do
+  pcall(function() v174:SetConfigFolder("LOCOPANI") end)
+  local configTab = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Configs" })
+  local configName = ""
+  local selectedConfig = nil
+  local configStatus
+  local configDropdown
+  local configNames = {}
+
+  configTab:CreateInput({
+    name = "Nome para salvar",
+    placeholder = "Digite um nome para salvar",
+    callback = function(value)
+      configName = tostring(value or "")
+    end,
+  })
+
+  local function setConfigStatus(message)
+    if configStatus and configStatus.Set then
+      pcall(function() configStatus:Set(message) end)
+    end
+    pcall(function() v174:Notify(message) end)
+  end
+
+  local function cleanConfigName(name)
+    name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    name = name:gsub("[^%w_%-]", "_")
+    if #name > 48 then name = name:sub(1, 48) end
+    return name
+  end
+
+  local function refreshConfigList()
+    local found = {}
+    -- Use the same config manager as SaveConfig/LoadConfig, so the dropdown
+    -- reads exactly the folder the script is configured to use.
+    local ok, files = pcall(function() return v174:ListConfigs() end)
+    if ok and type(files) == "table" then
+      for _, item in ipairs(files) do
+        local name = tostring(item):match("([^/\\]+)%.json$") or tostring(item)
+        name = name:gsub("%.json$", "")
+        if name ~= "" then found[name] = true end
+      end
+    end
+
+    configNames = {}
+    for name in pairs(found) do table.insert(configNames, name) end
+    table.sort(configNames, function(a, b) return string.lower(a) < string.lower(b) end)
+
+    if configDropdown and configDropdown.SetValues then
+      configDropdown:SetValues(configNames)
+    end
+
+    if selectedConfig and not found[selectedConfig] then selectedConfig = nil end
+    return configNames
+  end
+
+  -- Use the Gen2 wrapper so the dropdown can refresh through SetValues.
+  configDropdown = LOCOPANI_RayControl("Dropdown", configTab, "Configurações", {
+    Values = {},
+    Default = nil,
+    Placeholder = "Selecione uma configuração",
+  }, function(selected)
+    if type(selected) == "table" then selected = selected[1] end
+    if type(selected) == "string" and selected ~= "" then
+      selectedConfig = selected
+      configName = selected
+    end
+  end)
+
+  local function getConfigTarget()
+    if tostring(configName or ""):gsub("%s+", "") ~= "" then
+      return cleanConfigName(configName)
+    end
+    return cleanConfigName(selectedConfig)
+  end
+
+  configTab:CreateButton({
+    name = "Atualizar lista",
+    callback = function()
+      refreshConfigList()
+      setConfigStatus("Lista de configurações atualizada.")
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Salvar configuração",
+    callback = function()
+      local name = cleanConfigName(configName)
+      if name == "" then
+        setConfigStatus("Digite um nome para a nova configuração.")
+        return
+      end
+      local saveCallOk, saveResult = pcall(function() return v174:SaveConfig(name) end)
+      if saveCallOk and saveResult == true then
+        selectedConfig = name
+        refreshConfigList()
+        if configDropdown and configDropdown.Set then
+          pcall(function() configDropdown:Set(name) end)
+        elseif configDropdown and configDropdown._control and configDropdown._control.Set then
+          pcall(function() configDropdown._control:Set(name) end)
+        end
+        setConfigStatus("Configuração salva: " .. name)
+      else
+        setConfigStatus("Não foi possível salvar. Verifique se o executor suporta arquivos.")
+      end
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Carregar selecionada",
+    callback = function()
+      local name = getConfigTarget()
+      if name == "" then
+        setConfigStatus("Selecione uma configuração na lista ou digite um nome.")
+        return
+      end
+      if v174:LoadConfig(name) then
+        selectedConfig = name
+        setConfigStatus("Configuração carregada: " .. name)
+      else
+        setConfigStatus("Configuração não encontrada ou arquivo indisponível: " .. name)
+      end
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Excluir configuração selecionada",
+    callback = function()
+      -- Exclusão baseada somente na seleção do dropdown, nunca no texto digitado.
+      local name = cleanConfigName(selectedConfig)
+      if name == "" then
+        setConfigStatus("Selecione no menu a configuração que deseja excluir.")
+        return
+      end
+
+      local env = (type(getgenv) == "function" and getgenv()) or _G
+      local isfileFn = env.isfile or isfile
+      local deleteFn = env.delfile or delfile
+      local path = "LOCOPANI/configs/" .. name .. ".json"
+      if type(deleteFn) ~= "function" then
+        setConfigStatus("Este executor não suporta excluir arquivos (delfile).")
+        return
+      end
+
+      local exists = false
+      if type(isfileFn) == "function" then
+        local okExists, result = pcall(isfileFn, path)
+        exists = okExists and result == true
+      else
+        local listFn = env.listfiles or listfiles
+        if type(listFn) == "function" then
+          local okList, files = pcall(listFn, "LOCOPANI/configs")
+          if okList and type(files) == "table" then
+            for _, filePath in ipairs(files) do
+              local base = tostring(filePath):match("([^/\\]+)%.json$")
+              if base == name then exists = true break end
+            end
+          end
+        end
+      end
+      if not exists then
+        setConfigStatus("A configuração selecionada não foi encontrada.")
+        refreshConfigList()
+        return
+      end
+
+      local okDelete, deleteErr = pcall(deleteFn, path)
+      if not okDelete then
+        setConfigStatus("Falha ao excluir a configuração: " .. tostring(deleteErr))
+        return
+      end
+
+      -- Remove o autoload caso ele aponte para a configuração excluída.
+      local readFn = env.readfile or readfile
+      local writeFn = env.writefile or writefile
+      if type(readFn) == "function" and type(writeFn) == "function" then
+        local okRead, autoName = pcall(readFn, "LOCOPANI/autoload.txt")
+        if okRead and tostring(autoName or ""):gsub("^%s+", ""):gsub("%s+$", "") == name then
+          pcall(writeFn, "LOCOPANI/autoload.txt", "")
+        end
+      end
+
+      selectedConfig = nil
+      configName = ""
+      refreshConfigList()
+      setConfigStatus("Configuração excluída: " .. name)
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Ativar autoload",
+    callback = function()
+      local name = getConfigTarget()
+      if name == "" then
+        setConfigStatus("Selecione uma configuração na lista primeiro.")
+        return
+      end
+      local env = (type(getgenv) == "function" and getgenv()) or _G
+      local writeFn = env.writefile or writefile
+      if type(writeFn) ~= "function" then
+        setConfigStatus("Este executor não suporta salvar arquivos.")
+        return
+      end
+      local env2 = (type(getgenv) == "function" and getgenv()) or _G
+      local isfileFn = env2.isfile or isfile
+      local exists = false
+      if type(isfileFn) == "function" then
+        local okExists, result = pcall(isfileFn, "LOCOPANI/configs/" .. name .. ".json")
+        exists = okExists and result == true
+      else
+        local listFn = env2.listfiles or listfiles
+        if type(listFn) == "function" then
+          local okList, files = pcall(listFn, "LOCOPANI/configs")
+          if okList and type(files) == "table" then
+            for _, filePath in ipairs(files) do
+              if tostring(filePath):match("([^/\\\\]+)%.json$") == name then
+                exists = true
+                break
+              end
+            end
+          end
+        end
+      end
+      if not exists then
+        setConfigStatus("Essa configuração ainda não existe. Salve-a primeiro.")
+        return
+      end
+      pcall(function()
+        local mk = env.makefolder or makefolder
+        if type(mk) == "function" then
+          pcall(mk, "LOCOPANI")
+          pcall(mk, "LOCOPANI/configs")
+        end
+      end)
+      local ok = pcall(writeFn, "LOCOPANI/autoload.txt", name)
+      if ok then
+        setConfigStatus("Autoload ativado: " .. name)
+      else
+        setConfigStatus("Não foi possível definir o autoload.")
+      end
+    end,
+  })
+
+  configTab:CreateButton({
+    name = "Desativar autoload",
+    callback = function()
+      local env = (type(getgenv) == "function" and getgenv()) or _G
+      local writeFn = env.writefile or writefile
+      if type(writeFn) ~= "function" then
+        setConfigStatus("Este executor não suporta arquivos.")
+        return
+      end
+      local ok = pcall(writeFn, "LOCOPANI/autoload.txt", "")
+      if ok then
+        setConfigStatus("Autoload desativado.")
+      else
+        setConfigStatus("Não foi possível desativar o autoload.")
+      end
+    end,
+  })
+
+  refreshConfigList()
+end
+
 do
   v174:SetConfigFolder("LOCOPANI")
   pcall(function() v174:LoadAutoloadConfig() end)
 
-  local function f132()
-    local LocalPlayer_2 = players.LocalPlayer
-    local LOCOPANI_WINDOW = _G.LOCOPANI_WINDOW
-
-    local ScreenGui_7 = Instance.new("ScreenGui")
-    ScreenGui_7.Name = "LOCOPANI_Toggle"
-    ScreenGui_7.ResetOnSpawn = false
-    ScreenGui_7.IgnoreGuiInset = true
-    ScreenGui_7.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui_7.DisplayOrder = 9999
-    ScreenGui_7.Parent = LocalPlayer_2:WaitForChild("PlayerGui")
-
-    local ImageButton = Instance.new("ImageButton")
-    ImageButton.Size = UDim2.new(0, 55, 0, 55)
-    ImageButton.Position = UDim2.new(0.01, 0, 0.5, -27.5)
-    ImageButton.BackgroundColor3 = Color3.fromRGB(10, 10, 11)
-    ImageButton.BackgroundTransparency = 0.15
-    ImageButton.BorderSizePixel = 0
-    ImageButton.Selectable = false
-    ImageButton.ZIndex = 9999
-    ImageButton.Image = ""
-    ImageButton.ImageTransparency = 0.1
-    ImageButton.ScaleType = Enum.ScaleType.Fit
-    ImageButton.Parent = ScreenGui_7
-
-    -- Texto simples no lugar do ícone antigo
-    local ToggleLabel = Instance.new("TextLabel")
-    ToggleLabel.Name = "LOCOPANI_Label"
-    ToggleLabel.BackgroundTransparency = 1
-    ToggleLabel.Size = UDim2.new(1, 0, 1, 0)
-    ToggleLabel.Text = "L"
-    ToggleLabel.TextColor3 = Color3.fromRGB(235, 235, 235)
-    ToggleLabel.TextSize = 24
-    ToggleLabel.Font = Enum.Font.GothamBold
-    ToggleLabel.Active = false
-    ToggleLabel.Selectable = false
-    ToggleLabel.ZIndex = 10000
-    ToggleLabel.Parent = ImageButton
-
-    local UICorner_9 = Instance.new("UICorner")
-    UICorner_9.CornerRadius = UDim.new(1, 0)
-    UICorner_9.Parent = ImageButton
-
-    local UIStroke = Instance.new("UIStroke")
-    UIStroke.Color = Color3.fromRGB(245, 245, 247)
-    UIStroke.Thickness = 2
-    UIStroke.Transparency = 0.3
-    UIStroke.Parent = ImageButton
-
-    local UIGradient = Instance.new("UIGradient")
-
-    UIGradient.Color = ColorSequence.new({
-      ColorSequenceKeypoint.new(0, Color3.fromRGB(245, 245, 247)),
-      ColorSequenceKeypoint.new(0.5, Color3.fromRGB(130, 130, 136)),
-      ColorSequenceKeypoint.new(1, Color3.fromRGB(245, 245, 247)),
-    })
-
-    UIGradient.Rotation = 45
-    UIGradient.Parent = UIStroke
-
-    local v560 = false
-    local position20, position21
-
-    ImageButton.InputBegan:Connect(function(input11)
-      if input11.UserInputType == Enum.UserInputType.MouseButton1
-        or input11.UserInputType == Enum.UserInputType.Touch then
-        v560 = true
-        position20 = input11.Position
-        position21 = ImageButton.Position
-
-        input11.Changed:Connect(function()
-          if input11.UserInputState == Enum.UserInputState.End then
-            v560 = false
-          end
-        end)
-      end
-    end)
-
-    ImageButton.InputChanged:Connect(function(input12)
-      if v560
-        and (input12.UserInputType == Enum.UserInputType.MouseMovement
-          or input12.UserInputType == Enum.UserInputType.Touch) then
-        local v561 = input12.Position - position20
-
-        ImageButton.Position = UDim2.new(
-          position21.X.Scale, position21.X.Offset + v561.X, position21.Y.Scale,
-          position21.Y.Offset + v561.Y
-        )
-      end
-    end)
-
-    ImageButton.MouseEnter:Connect(function()
-      ImageButton.ImageTransparency = 0
-      UIStroke.Transparency = 0
-      ImageButton.BackgroundTransparency = 0.05
-    end)
-
-    ImageButton.MouseLeave:Connect(function()
-      ImageButton.ImageTransparency = 0.1
-      UIStroke.Transparency = 0.3
-      ImageButton.BackgroundTransparency = 0.15
-    end)
-
-    local v562 = LOCOPANI_RAY_VISIBLE
-
-    ImageButton.MouseButton1Click:Connect(function()
-      LOCOPANI_RAY_VISIBLE = not LOCOPANI_RAY_VISIBLE
-      v562 = LOCOPANI_RAY_VISIBLE
-
-      -- Never reveal the legacy UI; only toggle the Rayfield Gen2 window.
-      if LOCOPANI_WINDOW and LOCOPANI_WINDOW.Instance then
-        LOCOPANI_WINDOW.Instance.Visible = false
-      end
-      LOCOPANI_SetRayfieldVisibility(v562)
-
-      ImageButton.ImageTransparency = v562 and 0.1 or 0.7
-      UIStroke.Transparency = v562 and 0.3 or 0.8
-      ImageButton.BackgroundTransparency = v562 and 0.15 or 0.6
-    end)
-
-    return ImageButton
-  end
-
-  f132()
-
+  -- O botao flutuante circular com "L" foi removido.
+  -- A janela principal continua podendo ser aberta/fechada com RightShift.
   v174:Notify("LOCOPANI HUB Loaded Successfully! UPDATE V2.3")
   pcall(function() LOCOPANI_RAY_WINDOW:Notify({ title = "LOCOPANI", content = "HUB Loaded Successfully! UPDATE V2.3" }) end)
 end
