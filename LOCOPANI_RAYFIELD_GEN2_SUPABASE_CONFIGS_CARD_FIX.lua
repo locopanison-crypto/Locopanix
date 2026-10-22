@@ -2850,6 +2850,43 @@ doMove = replicatedStorage.Packages._Index["sleitnick_knit@1.7.0"].knit.Services
 stopAllEmotes = replicatedStorage.Packages._Index["sleitnick_knit@1.7.0"].knit.Services.AnimationService.RE.StopAllEmotes
 effect = replicatedStorage.Packages._Index["sleitnick_knit@1.7.0"].knit.Services.GameService.RE.Effect
 
+-- Custom chat-title changer: affects the title attribute consumed by chat UI.
+do
+  _G.LOCOPANI_CustomChatTitle = _G.LOCOPANI_CustomChatTitle or {
+    Enabled = false,
+    Text = "CUSTOM TITLE",
+    Color = Color3.fromRGB(96, 205, 255),
+  }
+
+  function _G.LOCOPANI_ApplyUserTitle()
+    if not localPlayer2 then return end
+    local customTitle = _G.LOCOPANI_CustomChatTitle
+    if customTitle and customTitle.Enabled then
+      local titleText = tostring(customTitle.Text or "")
+      if titleText == "" then
+        localPlayer2:SetAttribute("User_Title", "")
+        return
+      end
+      local color = customTitle.Color or Color3.fromRGB(96, 205, 255)
+      local r = math.clamp(math.floor(color.R * 255 + 0.5), 0, 255)
+      local g = math.clamp(math.floor(color.G * 255 + 0.5), 0, 255)
+      local b = math.clamp(math.floor(color.B * 255 + 0.5), 0, 255)
+      local hex = string.format("#%02X%02X%02X", r, g, b)
+      -- Escape rich-text characters so the user can type a literal title safely.
+      titleText = titleText:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+      localPlayer2:SetAttribute("User_Title", '<font color="' .. hex .. '"><b>' .. titleText .. '</b></font>')
+      return
+    end
+    if _G.CustomProtect and _G.CustomProtect.Enabled then
+      localPlayer2:SetAttribute("User_Title", tostring(_G.CustomProtect.Title or ""))
+    elseif _G.Protect and _G.Protect.IsEnabled and _G.Protect.IsEnabled() then
+      localPlayer2:SetAttribute("User_Title", tostring(_G.Protect.Title or "<font color='#FF0000'><b>Pro</b></font>"))
+    else
+      localPlayer2:SetAttribute("User_Title", "")
+    end
+  end
+end
+
 local v232 = {
   NameTag = "LOCOPANI PROTECTION",
   Title = "<font color='#FF0000'><b>Pro</b></font>",
@@ -2872,7 +2909,12 @@ local function f41()
       local PlayerName = Nametag:FindFirstChild("PlayerName")
 
       if PlayerName and PlayerName:IsA("TextLabel") then
-        PlayerName.Text = v232.NameTag
+        -- Custom Protect tem prioridade também após respawn/reset.
+        if _G.CustomProtect and _G.CustomProtect.Enabled then
+          PlayerName.Text = tostring(_G.CustomProtect.Name or "CUSTOM NAME")
+        else
+          PlayerName.Text = v232.NameTag
+        end
       end
     end
   end
@@ -2884,7 +2926,7 @@ local function f42()
   end
 
   if localPlayer2 then
-    localPlayer2:SetAttribute("User_Title", v232.Title)
+    _G.LOCOPANI_ApplyUserTitle()
   end
 end
 
@@ -3084,7 +3126,7 @@ local function f49(p121)
       end
     end
 
-    localPlayer2:SetAttribute("User_Title", "")
+    _G.LOCOPANI_ApplyUserTitle()
   end
 end
 
@@ -3122,6 +3164,7 @@ _G.Protect = {
   end,
   SetName = function(nameTag) v232.NameTag = nameTag end,
   SetTitle = function(title) v232.Title = title end,
+  Title = v232.Title,
   IsEnabled = function() return v232.Enabled end,
 }
 
@@ -3138,6 +3181,9 @@ _G.LOCOPANI = {
   end,
   IsEnabled = function() return v232.Enabled end,
 }
+
+-- Reapply the default title after the Protect API is initialized.
+_G.LOCOPANI_ApplyUserTitle()
 
 v235 = {
   Enabled = false,
@@ -3173,7 +3219,7 @@ function v235.updateTitle()
   end
 
   if localPlayer2 then
-    localPlayer2:SetAttribute("User_Title", v235.Title)
+    _G.LOCOPANI_ApplyUserTitle()
   end
 end
 
@@ -3377,6 +3423,10 @@ function v235.installCharacterWatcher()
     v235.updateNametag()
     v235.updateTitle()
     v235.setupNotifications()
+    v235.protectPlayerCard()
+    if v235.refreshLeaderboardMask then
+      v235.refreshLeaderboardMask()
+    end
   end)
 end
 
@@ -3390,6 +3440,9 @@ function v235.toggle(p123)
     v235.startCardLoop()
     v235.installCharacterWatcher()
     v235.protectPlayerCard()
+    if v235.refreshLeaderboardMask then
+      v235.refreshLeaderboardMask()
+    end
   else
     if v235.NotifConn then
       v235.NotifConn:Disconnect()
@@ -3427,7 +3480,7 @@ function v235.toggle(p123)
       end
     end
 
-    localPlayer2:SetAttribute("User_Title", "")
+    _G.LOCOPANI_ApplyUserTitle()
   end
 end
 
@@ -3437,6 +3490,9 @@ function v235.setName(p124)
   if v235.Enabled then
     v235.updateNametag()
     v235.protectPlayerCard()
+    if v235.refreshLeaderboardMask then
+      v235.refreshLeaderboardMask()
+    end
   end
 end
 
@@ -3449,6 +3505,138 @@ function v235.setTitle(p125)
 end
 
 _G.CustomProtect = v235
+
+do
+-- LOCOPANI leaderboard/name privacy fix (optimized):
+-- Watch text changes and newly-created UI elements instead of rescanning the whole
+-- PlayerGui every 0.5 seconds. This keeps the name mask responsive with much less work.
+local LOCOPANI_NameMaskConnections = {}
+local LOCOPANI_NameMaskBusy = setmetatable({}, { __mode = "k" })
+
+local function LOCOPANI_ApplyNameMask(label)
+  if not label or not label.Parent then
+    return
+  end
+
+  local player = localPlayer2
+  if not player then
+    return
+  end
+
+  local customEnabled = v235 and v235.Enabled == true
+  local protectEnabled = v232 and v232.Enabled == true
+  if not customEnabled and not protectEnabled then
+    return
+  end
+
+  local realName = tostring(player.Name or "")
+  if realName == "" then
+    return
+  end
+
+  -- Read the current input value too, so the leaderboard never gets stuck
+  -- displaying the default "CUSTOM NAME" after the user edits the field.
+  local replacement
+  if customEnabled then
+    local configuredName = nil
+    pcall(function()
+      configuredName = options and options.customprotectname and options.customprotectname.Value
+    end)
+    if type(configuredName) ~= "string" or configuredName:gsub("%s+", "") == "" then
+      configuredName = v235.Name
+    end
+    replacement = tostring(configuredName or "CUSTOM NAME")
+  else
+    replacement = tostring(v232.NameTag or "LOCOPANI PROTECTION")
+  end
+
+  local ok, currentText = pcall(function()
+    return label.Text
+  end)
+  if not ok or type(currentText) ~= "string" or currentText == "" then
+    return
+  end
+
+  local updatedText = currentText
+  local candidates = { realName, tostring(v232 and v232.NameTag or "LOCOPANI PROTECTION"), "LOCOPANI PROTECT", "CUSTOM NAME" }
+  for _, candidate in ipairs(candidates) do
+    if candidate ~= "" and string.find(updatedText, candidate, 1, true) then
+      updatedText = string.gsub(updatedText, candidate, function()
+        return replacement
+      end)
+    end
+  end
+
+  if updatedText ~= currentText then
+    LOCOPANI_NameMaskBusy[label] = true
+    pcall(function()
+      label.Text = updatedText
+    end)
+    LOCOPANI_NameMaskBusy[label] = nil
+  end
+end
+
+-- Reaplica imediatamente o nome atual a todos os labels já observados.
+-- Isso permite trocar o nome durante a partida sem precisar reconectar.
+v235.refreshLeaderboardMask = function()
+  for label in pairs(LOCOPANI_NameMaskConnections) do
+    if label and label.Parent then
+      LOCOPANI_ApplyNameMask(label)
+    else
+      LOCOPANI_NameMaskConnections[label] = nil
+    end
+  end
+end
+
+local function LOCOPANI_WatchNameLabel(instance)
+  if not (instance:IsA("TextLabel") or instance:IsA("TextButton") or instance:IsA("TextBox")) then
+    return
+  end
+  if LOCOPANI_NameMaskConnections[instance] then
+    LOCOPANI_ApplyNameMask(instance)
+    return
+  end
+
+  local ok, connection = pcall(function()
+    return instance:GetPropertyChangedSignal("Text"):Connect(function()
+      if not LOCOPANI_NameMaskBusy[instance] then
+        LOCOPANI_ApplyNameMask(instance)
+      end
+    end)
+  end)
+  if ok and connection then
+    LOCOPANI_NameMaskConnections[instance] = connection
+  end
+
+  LOCOPANI_ApplyNameMask(instance)
+end
+
+task.spawn(function()
+  local player = localPlayer2
+  if not player then
+    return
+  end
+
+  local playerGui = player:FindFirstChildOfClass("PlayerGui")
+  while not playerGui and player.Parent do
+    task.wait(1)
+    playerGui = player:FindFirstChildOfClass("PlayerGui")
+  end
+  if not playerGui then
+    return
+  end
+
+  -- One initial pass, then only handle labels when their text/UI changes.
+  for _, instance in ipairs(playerGui:GetDescendants()) do
+    LOCOPANI_WatchNameLabel(instance)
+  end
+
+  playerGui.DescendantAdded:Connect(function(instance)
+    LOCOPANI_WatchNameLabel(instance)
+  end)
+end)
+end -- end scoped leaderboard name-mask block
+
 v238 = { EffectEnabled = false, CardEnabled = false, BallEnabled = false }
 
 do
@@ -6913,7 +7101,7 @@ do
   f104()
 end
 
-local function f105(p177)
+local function f105(p177, p178)
   local Character_31 = localPlayer2.Character
 
   if not Character_31 or not Character_31:FindFirstChild("UpperTorso") then
@@ -6947,7 +7135,7 @@ local function f105(p177)
       end
     end
 
-    if not v219 then
+    if not v219 and p178 ~= true then
       local v419 = v226[Character_31]
 
       if v419 then
@@ -7326,17 +7514,19 @@ end
 v451 = { real = nil, want = {}, selected = {}, selectedItems = {}, featureEnabled = {}, controlEnabled = false }
 
 function v451.mark(p185, p186)
-  -- The controlled inventory hides unselected cards, balls and score effects locally.
+  -- Legacy Visuals changers unlock their matching cosmetic category locally.
+  -- Build the desired inventory from the actual feature toggles; v451.selected
+  -- is reserved for selection/equip state and is not the toggle registry.
   v451.featureEnabled = v451.featureEnabled or {}
   v451.featureEnabled[p185] = p186 == true
   v451.want = {}
-  for selectedType, selectedEnabled in pairs(v451.selected or {}) do
-    if selectedEnabled then
-      v451.want[selectedType] = true
+  for featureType, featureEnabled in pairs(v451.featureEnabled) do
+    if featureEnabled == true then
+      v451.want[featureType] = true
     end
   end
 
-  if v451.controlEnabled == true or next(v451.want) ~= nil then
+  if v451.controlEnabled == true or next(v451.want) ~= nil or v451.unlockAllJerseys == true then
     v451.wear()
   end
 
@@ -7399,7 +7589,7 @@ function v451.mark(p185, p186)
           end
         end
 
-        local v463 = v451.controlEnabled == true or next(v451.want) ~= nil
+        local v463 = v451.controlEnabled == true or next(v451.want) ~= nil or v451.unlockAllJerseys == true
 
         if not v463 then
           pcall(function() v456.Inventory:set(v451.real) end)
@@ -7438,12 +7628,12 @@ function v451.mark(p185, p186)
             Card = true,
             Ball = true,
             ScoreEffect = true,
+            Jersey = true,
           }
 
           local function isControlledCosmetic(itemName)
-            -- First check the dropdown lists (this also covers ball assets that
-            -- are models rather than Item.Entity ModuleScripts).
-            for _, list in ipairs({ v210 or {}, v212 or {}, v205 or {}, v451.titleNames or {} }) do
+            -- First check the dropdown lists (this also covers asset-only cosmetics).
+            for _, list in ipairs({ v210 or {}, v212 or {}, v205 or {}, v451.titleNames or {}, v211 or {}, v451.jerseyNames or {} }) do
               for _, listedName in ipairs(list) do
                 if listedName == itemName then return true end
               end
@@ -7461,12 +7651,23 @@ function v451.mark(p185, p186)
               or string.find(lowered, "scoreeffect", 1, true) ~= nil
               or string.find(lowered, "groundhit", 1, true) ~= nil
               or string.find(lowered, "title", 1, true) ~= nil
+              or string.find(lowered, "jersey", 1, true) ~= nil
           end
 
           for key14, value93 in pairs(v451.real) do
             if v451.controlEnabled ~= true or not isControlledCosmetic(key14)
               or (v451.selectedItems and v451.selectedItems[key14]) then
               v454[key14] = value93
+            end
+          end
+
+          -- Visual-only inventory unlock: add every known jersey to the local
+          -- inventory view without changing the Equipped store or calling Equip.
+          if v451.unlockAllJerseys == true then
+            for _, jerseyName in ipairs(v451.jerseyNames or v211 or {}) do
+              if type(jerseyName) == "string" and jerseyName ~= "" then
+                v454[jerseyName] = (v451.real and v451.real[jerseyName]) or 1
+              end
             end
           end
 
@@ -7528,6 +7729,11 @@ function v451.typeOf(p187)
   for _, name in ipairs(v451.titleNames or {}) do
     if name == p187 then return "Title", { DisplayName = p187 } end
   end
+  -- Jerseys are listed from Content.Item.Entities or Assets.Jersey, so they
+  -- may be visible locally even when the server inventory does not own them.
+  for _, name in ipairs(v451.jerseyNames or v211 or {}) do
+    if name == p187 then return "Jersey", { DisplayName = p187, Id = p187 } end
+  end
   return nil
 end
 
@@ -7546,9 +7752,19 @@ function v451.paint(p188, p189, p190)
     ball = p189 or realEquipped.Ball or "ClassicBall"
     task.spawn(function() pcall(f108) end)
   elseif p188 == "Jersey" then
-    jersey = p189 or realEquipped.Jersey or "DragonTuxedoJersey"
-    v418 = nil
-    task.spawn(function() pcall(f105, jersey) end)
+    if p189 then
+      -- Equipping from either inventory uses the local visual setter directly;
+      -- it must not depend on the separate Auto Apply Jersey toggle.
+      jersey = p189
+      v418 = nil
+      task.spawn(function() pcall(f105, jersey, true) end)
+    else
+      -- On unequip/revert, restore the original local appearance unless
+      -- Auto Apply Jersey is enabled, in which case re-apply the chosen jersey.
+      jersey = realEquipped.Jersey or "DragonTuxedoJersey"
+      v418 = nil
+      task.spawn(function() pcall(f105, jersey, v219 == true) end)
+    end
   elseif p188 == "PlayerCard" then
     if p189 then
       v207 = p189
@@ -8003,6 +8219,54 @@ f36(RenderStepped:Connect(function()
   end
 end))
 
+-- LOCOPANI: FPS-friendly Score Effect preservation.
+-- Roblox does not expose per-effect graphics quality, so do not raise global quality.
+LOCOPANI_SCORE_QUALITY_ENABLED = false
+LOCOPANI_SCORE_QUALITY_TOKEN = 0
+LOCOPANI_SCORE_QUALITY_ACTIVE = false
+LOCOPANI_SCORE_QUALITY_PREV_RENDER = nil
+LOCOPANI_SCORE_QUALITY_PREV_SAVED = nil
+LOCOPANI_SCORE_QUALITY_HAD_RENDER = false
+LOCOPANI_SCORE_QUALITY_HAD_SAVED = false
+
+function LOCOPANI_RestoreTemporaryScoreQuality()
+  -- Safety cleanup for any older state; this version never boosts global quality.
+  if not LOCOPANI_SCORE_QUALITY_ACTIVE then
+    return
+  end
+
+  if LOCOPANI_SCORE_QUALITY_HAD_RENDER and LOCOPANI_SCORE_QUALITY_PREV_RENDER ~= nil then
+    pcall(function()
+      settings().Rendering.QualityLevel = LOCOPANI_SCORE_QUALITY_PREV_RENDER
+    end)
+  end
+
+  if LOCOPANI_SCORE_QUALITY_HAD_SAVED and LOCOPANI_SCORE_QUALITY_PREV_SAVED ~= nil then
+    pcall(function()
+      UserSettings():GetService("UserGameSettings").SavedQualityLevel = LOCOPANI_SCORE_QUALITY_PREV_SAVED
+    end)
+  end
+
+  LOCOPANI_SCORE_QUALITY_ACTIVE = false
+  LOCOPANI_SCORE_QUALITY_PREV_RENDER = nil
+  LOCOPANI_SCORE_QUALITY_PREV_SAVED = nil
+  LOCOPANI_SCORE_QUALITY_HAD_RENDER = false
+  LOCOPANI_SCORE_QUALITY_HAD_SAVED = false
+end
+
+function LOCOPANI_BoostTemporaryScoreQuality()
+  -- Intentionally disabled: raising global quality caused FPS drops and did not
+  -- selectively improve Score Effects.
+  LOCOPANI_SCORE_QUALITY_ENABLED = false
+  LOCOPANI_RestoreTemporaryScoreQuality()
+end
+
+function LOCOPANI_SetTemporaryScoreQuality(enabled)
+  -- Compatibility wrapper: preserve the old callable API without a global boost.
+  LOCOPANI_SCORE_QUALITY_ENABLED = false
+  LOCOPANI_RestoreTemporaryScoreQuality()
+end
+
 local connect7, connect8, connect9
 
 local function f113()
@@ -8051,11 +8315,23 @@ local function f113()
         v535 = v536
       end
 
+      -- FPS-friendly mode: keep global rendering quality unchanged during score effects.
+
       if firesignal then
         firesignal(HitGround.OnClientEvent, table.unpack({
           p208, v535, false, 5, ScoreEffect_2, Child_3,
           Vector3.new(-0.0000020885916001134, 1, -0.000004710930170404),
         }, 1, 7))
+      end
+
+      if LOCOPANI_SCORE_QUALITY_ENABLED and LOCOPANI_SCORE_QUALITY_ACTIVE then
+        LOCOPANI_SCORE_QUALITY_TOKEN = LOCOPANI_SCORE_QUALITY_TOKEN + 1
+        LOCOPANI_QUALITY_RESTORE_TOKEN = LOCOPANI_SCORE_QUALITY_TOKEN
+        task.delay(2.75, function()
+          if LOCOPANI_QUALITY_RESTORE_TOKEN == LOCOPANI_SCORE_QUALITY_TOKEN then
+            LOCOPANI_RestoreTemporaryScoreQuality()
+          end
+        end)
       end
 
       task.wait(0.5)
@@ -8327,6 +8603,41 @@ local function f120()
       return
     end
 
+    -- Preserve recognizable score-effect assets when the option is enabled.
+    if _G.LOCOPANI_PRESERVE_SCORE_EFFECTS then
+      local ancestor = p221
+      for _ = 1, 12 do
+        if not ancestor then break end
+        local lowerName = string.lower(ancestor.Name)
+        if string.find(lowerName, "score", 1, true)
+          or string.find(lowerName, "effect", 1, true)
+          or string.find(lowerName, "supernova", 1, true)
+          or string.find(lowerName, "groundhit", 1, true)
+          or string.find(lowerName, "impact", 1, true)
+          or string.find(lowerName, "point", 1, true)
+          or string.find(lowerName, "vfx", 1, true)
+          or string.find(lowerName, "particle", 1, true)
+          or string.find(lowerName, "aura", 1, true)
+          or string.find(lowerName, "burst", 1, true)
+          or string.find(lowerName, "celebration", 1, true)
+          or string.find(lowerName, "hitindicator", 1, true)
+          or string.find(lowerName, "spike", 1, true)
+          or string.find(lowerName, "shockwave", 1, true)
+          or string.find(lowerName, "ring", 1, true)
+          or string.find(lowerName, "glow", 1, true)
+          or string.find(lowerName, "flash", 1, true)
+          or string.find(lowerName, "spark", 1, true)
+          or string.find(lowerName, "explosion", 1, true)
+          or string.find(lowerName, "nova", 1, true)
+          or string.find(lowerName, "charge", 1, true)
+          or string.find(lowerName, "trail", 1, true)
+          or string.find(lowerName, "beam", 1, true) then
+          return
+        end
+        ancestor = ancestor.Parent
+      end
+    end
+
     if p221:IsA("BasePart") then
       f124(p221, "Material", Enum.Material.SmoothPlastic)
       f124(p221, "Reflectance", 0)
@@ -8537,6 +8848,7 @@ end)
 local LOCOPANI_RAY_TABS = {
   Updates = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Updates" }),
   Main = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Main" }),
+  Graphics = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Graphics" }),
   Character = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Character" }),
   Visuals = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Visuals" }),
   ["Inventário Controlado"] = LOCOPANI_RAY_WINDOW:CreateTab({ name = "Inventário Controlado" }),
@@ -8643,6 +8955,10 @@ local function LOCOPANI_RayControl(kind, tab, name, cfg, callback)
     common.placeholder = cfg.Placeholder or title
     common.callback = onValue
     h = tab:CreateInput(common)
+  elseif kind == "ColorPicker" then
+    common.color = cfg.Default or Color3.fromRGB(96, 205, 255)
+    common.callback = onValue
+    h = tab:CreateColorPicker(common)
   elseif kind == "Keybind" then
     local key = cfg.Default or "RightShift"
     local enumKey = key
@@ -8715,6 +9031,11 @@ function LOCOPANI_RayGroup:AddButton(name, callback)
 end
 function LOCOPANI_RayGroup:AddSlider(name, cfg)
   local h = LOCOPANI_RayControl("Slider", self._tab, name, cfg, cfg and cfg.Callback)
+  options[name] = h; v174.Options[name] = h
+  return h
+end
+function LOCOPANI_RayGroup:AddColorPicker(name, cfg)
+  local h = LOCOPANI_RayControl("ColorPicker", self._tab, name, cfg, cfg and cfg.Callback)
   options[name] = h; v174.Options[name] = h
   return h
 end
@@ -9096,20 +9417,154 @@ v546.HitboxGroup:AddButton({
   end,
 })
 
-v546.PerfGroup = v545.Main:AddLeftGroupbox("Performance")
+do
+  v546.GraphicsGroup = v545.Graphics:AddLeftGroupbox("Graphics Settings")
 
-v546.PerfGroup:AddToggle("antilag", {
-  Text = "Anti-Lag",
-  Tooltip = "Reduce graphics for better performance",
-  Default = false,
-  Callback = function(value126)
-    if value126 then
-      f120()
-    else
-      f119()
-    end
-  end,
-})
+  -- Anti-Lag remains a local-only optimization. When score-effect preservation
+  -- is enabled, f126 skips recognizable score-effect descendants.
+  v546.GraphicsGroup:AddToggle("antilag", {
+    Text = "Anti-Lag",
+    Tooltip = "Reduce graphics for better performance",
+    Default = false,
+    Callback = function(value126)
+      if value126 then
+        f120()
+      else
+        f119()
+      end
+    end,
+  })
+
+  v546.GraphicsGroup:AddToggle("scoreeffectvisuals", {
+    Text = "Preserve Score Effect Visuals (FPS Friendly)",
+    Tooltip = "Preserves recognizable score-effect particles, lights, beams, trails, glow, and textures from Anti-Lag changes. Does not force Roblox engine graphics to maximum.",
+    Default = false,
+    Callback = function(value)
+      _G.LOCOPANI_PRESERVE_SCORE_EFFECTS = value == true
+      -- FPS-friendly mode: never raise global Roblox quality for a score.
+      LOCOPANI_SCORE_QUALITY_ENABLED = false
+      LOCOPANI_RestoreTemporaryScoreQuality()
+      if value and v231 then
+        -- Restore saved properties for recognizable score-effect assets that
+        -- Anti-Lag already simplified. This is best-effort: Roblox's global
+        -- rendering quality still controls engine-level particle fidelity.
+        -- Collect first, then mutate v231 safely after iteration.
+        local restoreList = {}
+        for instance, savedProperties in pairs(v231) do
+          local ancestor = instance
+          local isScoreEffect = false
+          for _ = 1, 12 do
+            if not ancestor then break end
+            local lowerName = string.lower(ancestor.Name)
+            if string.find(lowerName, "score", 1, true)
+              or string.find(lowerName, "effect", 1, true)
+              or string.find(lowerName, "supernova", 1, true)
+              or string.find(lowerName, "groundhit", 1, true)
+              or string.find(lowerName, "impact", 1, true)
+              or string.find(lowerName, "point", 1, true)
+              or string.find(lowerName, "vfx", 1, true)
+              or string.find(lowerName, "particle", 1, true)
+              or string.find(lowerName, "aura", 1, true)
+              or string.find(lowerName, "burst", 1, true)
+              or string.find(lowerName, "celebration", 1, true)
+              or string.find(lowerName, "hitindicator", 1, true)
+              or string.find(lowerName, "spike", 1, true)
+              or string.find(lowerName, "shockwave", 1, true)
+              or string.find(lowerName, "ring", 1, true)
+              or string.find(lowerName, "glow", 1, true)
+              or string.find(lowerName, "flash", 1, true)
+              or string.find(lowerName, "spark", 1, true)
+              or string.find(lowerName, "explosion", 1, true)
+              or string.find(lowerName, "nova", 1, true)
+              or string.find(lowerName, "charge", 1, true)
+              or string.find(lowerName, "trail", 1, true)
+              or string.find(lowerName, "beam", 1, true) then
+              isScoreEffect = true
+              break
+            end
+            ancestor = ancestor.Parent
+          end
+          if isScoreEffect then
+            table.insert(restoreList, {instance = instance, properties = savedProperties})
+          end
+        end
+
+        for _, entry in ipairs(restoreList) do
+          for property, originalValue in pairs(entry.properties) do
+            pcall(function() entry.instance[property] = originalValue end)
+          end
+          v231[entry.instance] = nil
+        end
+      end
+    end,
+  })
+
+  -- Keep the V9 optimizer profiles but place them in Graphics.
+  do
+    local LOCOPANI_GRAPHICS_PROFILE = "Balanced Graphics"
+    local LOCOPANI_GRAPHICS_APPLYING = false
+    local LOCOPANI_GRAPHICS_ORIGINAL_QUALITY = nil
+    local LOCOPANI_GRAPHICS_ORIGINAL_SAVED_QUALITY = nil
+    v546.GraphicsGroup:AddDropdown("graphicsquality", {
+      Text = "Graphics Optimizer",
+      Tooltip = "Choose a local graphics profile. Higher quality may reduce FPS on weaker PCs.",
+      Values = {"Balanced Graphics", "Ultra Graphics", "FPS Boost", "Restore Default"},
+      Default = "Balanced Graphics",
+      Callback = function(profile)
+        if LOCOPANI_GRAPHICS_APPLYING or type(profile) ~= "string" then return end
+        LOCOPANI_GRAPHICS_APPLYING = true
+        local ok, err = pcall(function()
+          if LOCOPANI_GRAPHICS_ORIGINAL_QUALITY == nil then
+            f119()
+            local rendering = settings().Rendering
+            local userGameSettings = UserSettings():GetService("UserGameSettings")
+            LOCOPANI_GRAPHICS_ORIGINAL_QUALITY = rendering.QualityLevel
+            pcall(function()
+              LOCOPANI_GRAPHICS_ORIGINAL_SAVED_QUALITY = userGameSettings.SavedQualityLevel
+            end)
+          else
+            f119()
+          end
+
+          if profile == "FPS Boost" then
+            f120()
+            LOCOPANI_GRAPHICS_PROFILE = profile
+            v174:Notify("Graphics Optimizer: FPS Boost enabled")
+          elseif profile == "Balanced Graphics" or profile == "Ultra Graphics" then
+            local rendering = settings().Rendering
+            local userGameSettings = UserSettings():GetService("UserGameSettings")
+            local target = profile == "Ultra Graphics" and Enum.QualityLevel.Level10 or Enum.QualityLevel.Level06
+            rendering.QualityLevel = target
+            pcall(function()
+              userGameSettings.SavedQualityLevel = profile == "Ultra Graphics"
+                and Enum.SavedQualitySetting.QualityLevel10
+                or Enum.SavedQualitySetting.QualityLevel6
+            end)
+            LOCOPANI_GRAPHICS_PROFILE = profile
+            v174:Notify(profile .. " enabled. FPS depends on your PC and game settings.")
+          elseif profile == "Restore Default" then
+            local rendering = settings().Rendering
+            rendering.QualityLevel = LOCOPANI_GRAPHICS_ORIGINAL_QUALITY
+            pcall(function()
+              if LOCOPANI_GRAPHICS_ORIGINAL_SAVED_QUALITY ~= nil then
+                UserSettings():GetService("UserGameSettings").SavedQualityLevel = LOCOPANI_GRAPHICS_ORIGINAL_SAVED_QUALITY
+              end
+            end)
+            LOCOPANI_GRAPHICS_ORIGINAL_QUALITY = nil
+            LOCOPANI_GRAPHICS_ORIGINAL_SAVED_QUALITY = nil
+            LOCOPANI_GRAPHICS_PROFILE = profile
+            v174:Notify("Graphics quality restored to its original setting")
+          end
+        end)
+        if not ok then
+          warn("LOCOPANI Graphics Optimizer: " .. tostring(err))
+          pcall(function() v174:Notify("Graphics profile could not be fully applied") end)
+        end
+        LOCOPANI_GRAPHICS_APPLYING = false
+      end,
+    })
+  end
+end -- Graphics category scope; keep module-level locals low
 
 v546.MoveGroup = v545.Main:AddRightGroupbox("Movement")
 
@@ -9853,12 +10308,27 @@ do
     end
     table.sort(v451.titleNames)
   end
+  -- Jerseys are sourced from the same list used by Jersey Changer.
+  v451.jerseyNames = {}
+  do
+    local seenJerseys = {}
+    for _, name in ipairs(v211 or {}) do
+      if type(name) == "string" and not seenJerseys[name] then
+        seenJerseys[name] = true
+        table.insert(v451.jerseyNames, name)
+      end
+    end
+    table.sort(v451.jerseyNames)
+  end
+
   v451.controlSelections = v451.controlSelections or {
     Cards = {},
     Balls = {},
     ScoreEffects = {},
     Titles = {},
+    Jerseys = {},
   }
+  v451.controlSelections.Jerseys = v451.controlSelections.Jerseys or {}
 
   local function rebuildSelectedItems()
     v451.selectedItems = {}
@@ -9898,7 +10368,7 @@ do
 
   inventoryControlGroup:AddToggle("controlledinventoryenabled", {
     Text = "Ativar inventário controlado",
-    Tooltip = "Quando ativado, só aparecem os Cards, Balls e Score Effects escolhidos nos menus abaixo.",
+    Tooltip = "Quando ativado, controla localmente quais Cards, Balls, Score Effects, Titles e Jerseys aparecem no inventário.",
     Default = false,
     Callback = function(enabled)
       v451.controlEnabled = enabled == true
@@ -9947,6 +10417,17 @@ do
     Text = "Titles que aparecem no inventário",
     Callback = function(selected)
       applySelection("Titles", selected, v451.titleNames)
+    end,
+  })
+
+  local storeGroupJersey = v545["Inventário Controlado"]:AddRightGroupbox("Jersey Changer")
+  storeGroupJersey:AddDropdown("storescamjerseys", {
+    Values = v451.jerseyNames,
+    Default = {},
+    Multi = true,
+    Text = "Jerseys visíveis (não equipa)",
+    Callback = function(selected)
+      applySelection("Jerseys", selected, v451.jerseyNames)
     end,
   })
 end
@@ -10026,6 +10507,51 @@ v546.VisualProtectGroup:AddToggle("kazanawhitejump", {
   Callback = function(value154) v225 = value154 end,
 })
 
+-- Custom title shown alongside the user's name when they speak in chat.
+do
+  local chatTitleGroup = v545.Visuals:AddLeftGroupbox("Custom Chat Title")
+  local chatTitleState = _G.LOCOPANI_CustomChatTitle
+
+  chatTitleGroup:AddToggle("customchattitleenabled", {
+    Text = "Custom Title Changer",
+    Tooltip = "Personaliza o título exibido quando você fala no chat.",
+    Default = chatTitleState.Enabled,
+    Callback = function(enabled)
+      chatTitleState.Enabled = enabled and true or false
+      _G.LOCOPANI_ApplyUserTitle()
+    end,
+  })
+
+  chatTitleGroup:AddInput("customchattitletext", {
+    Default = chatTitleState.Text,
+    Text = "Título do chat",
+    Placeholder = "Digite o título que deseja",
+    Callback = function(value)
+      chatTitleState.Text = tostring(value or "")
+      if chatTitleState.Enabled then _G.LOCOPANI_ApplyUserTitle() end
+    end,
+  })
+
+  chatTitleGroup:AddColorPicker("customchattitlecolor", {
+    Text = "Cor do título",
+    Default = chatTitleState.Color,
+    Callback = function(color, alpha)
+      if typeof(color) == "Color3" then
+        chatTitleState.Color = color
+        if chatTitleState.Enabled then _G.LOCOPANI_ApplyUserTitle() end
+      end
+    end,
+  })
+
+  chatTitleGroup:AddButton({
+    Text = "Aplicar título do chat",
+    Func = function()
+      _G.LOCOPANI_ApplyUserTitle()
+      if v174 and v174.Notify then v174:Notify("Título do chat aplicado") end
+    end,
+  })
+end
+
 v546.CustomProtectGroup = v545.Visuals:AddLeftGroupbox("Custom Protect")
 
 v546.CustomProtectGroup:AddToggle("customprotect", {
@@ -10059,6 +10585,9 @@ v546.CustomProtectGroup:AddButton({
       v235.updateNametag()
       v235.updateTitle()
       v235.protectPlayerCard()
+      if v235.refreshLeaderboardMask then
+        v235.refreshLeaderboardMask()
+      end
 
       v174:Notify("Custom Protect applied")
     else
@@ -10263,9 +10792,24 @@ v546.JerseyGroup:AddDropdown("jerseyselect", {
   end,
 })
 
+v546.JerseyGroup:AddToggle("unlockalljerseysinventory", {
+  Text = "Unlock All Jerseys in Inventory",
+  Tooltip = "Shows all jerseys in the local Misc inventory view only. Does not equip them or grant server ownership.",
+  Default = false,
+  Callback = function(enabled)
+    v451.unlockAllJerseys = enabled == true
+    -- Refresh the local inventory view. This does not touch Equipped.
+    pcall(function()
+      if v451 and v451.mark then
+        v451.mark("Jersey", enabled == true)
+      end
+    end)
+  end,
+})
+
 v546.JerseyGroup:AddToggle("autoapplyjersey", {
   Text = "Auto Apply Jersey",
-  Tooltip = "Automatically apply selected jersey",
+  Tooltip = "Automatically apply the selected jersey to your character (visual only).",
   Default = false,
   Callback = function(value166)
     v219 = value166
