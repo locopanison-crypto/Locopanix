@@ -2887,6 +2887,46 @@ do
   end
 end
 
+-- LOCOPANI: troca de nomes idempotente (evita "PROTECTCTCT..." quando o texto novo
+-- contém o texto antigo). Troca primeiro os trechos mais longos por um marcador e
+-- só no fim coloca o nome final, então o resultado nunca é reprocessado.
+function LOCOPANI_SafeReplace(text, candidates, replacement)
+  if type(text) ~= "string" or text == "" then return text end
+  local list = {}
+  for _, c in ipairs(candidates) do
+    if type(c) == "string" and c ~= "" then table.insert(list, c) end
+  end
+  table.sort(list, function(a, b) return #a > #b end)
+  local PH = "\1LOCOPANI\2"
+  local out, changed = text, false
+  for _, c in ipairs(list) do
+    local parts, pos = {}, 1
+    while true do
+      local a, b = string.find(out, c, pos, true)
+      if not a then break end
+      table.insert(parts, string.sub(out, pos, a - 1))
+      table.insert(parts, PH)
+      pos = b + 1
+      changed = true
+    end
+    if #parts > 0 then
+      table.insert(parts, string.sub(out, pos))
+      out = table.concat(parts)
+    end
+  end
+  if not changed then return text end
+  local pieces, pos = {}, 1
+  while true do
+    local a, b = string.find(out, PH, pos, true)
+    if not a then break end
+    table.insert(pieces, string.sub(out, pos, a - 1))
+    table.insert(pieces, replacement)
+    pos = b + 1
+  end
+  table.insert(pieces, string.sub(out, pos))
+  return table.concat(pieces)
+end
+
 local v232 = {
   NameTag = "LOCOPANI PROTECTION",
   Title = "<font color='#FF0000'><b>Pro</b></font>",
@@ -2988,9 +3028,7 @@ local function f45()
 
         local text9 = descendant.Text or ""
         if string.find(text9, localPlayer2.Name, 1, true) then
-          descendant.Text = string.gsub(text9, localPlayer2.Name, function()
-            return v232.NameTag
-          end)
+          descendant.Text = LOCOPANI_SafeReplace(text9, { localPlayer2.Name }, v232.NameTag)
         end
       end
     end)
@@ -3028,7 +3066,7 @@ function f44(p120)
       local text10 = TextLabel.Text or ""
 
       if string.find(text10, localPlayer2.Name) then
-        TextLabel.Text = string.gsub(text10, localPlayer2.Name, v232.NameTag)
+        TextLabel.Text = LOCOPANI_SafeReplace(text10, { localPlayer2.Name }, v232.NameTag)
       end
 
       return
@@ -3242,24 +3280,7 @@ function v235.replaceLegendName(label)
 
   -- O listener do protetor antigo pode ter trocado o nome primeiro.
   -- Substituímos tanto o username real quanto o nome padrão antigo.
-  if playerName ~= "" and string.find(text, playerName, 1, true) then
-    text = string.gsub(text, playerName, function()
-      return customName
-    end)
-  end
-
-  if oldProtectName ~= "" and string.find(text, oldProtectName, 1, true) then
-    text = string.gsub(text, oldProtectName, function()
-      return customName
-    end)
-  end
-
-  -- Compatibilidade com textos já alterados para o nome padrão antigo.
-  if string.find(text, "LOCOPANI PROTECT", 1, true) then
-    text = string.gsub(text, "LOCOPANI PROTECT", function()
-      return customName
-    end)
-  end
+  text = LOCOPANI_SafeReplace(text, { playerName, oldProtectName, "LOCOPANI PROTECT" }, customName)
 
   if label.Text ~= text then
     label.Text = text
@@ -3559,13 +3580,7 @@ local function LOCOPANI_ApplyNameMask(label)
 
   local updatedText = currentText
   local candidates = { realName, tostring(v232 and v232.NameTag or "LOCOPANI PROTECTION"), "LOCOPANI PROTECT", "CUSTOM NAME" }
-  for _, candidate in ipairs(candidates) do
-    if candidate ~= "" and string.find(updatedText, candidate, 1, true) then
-      updatedText = string.gsub(updatedText, candidate, function()
-        return replacement
-      end)
-    end
-  end
+  updatedText = LOCOPANI_SafeReplace(updatedText, candidates, replacement)
 
   if updatedText ~= currentText then
     LOCOPANI_NameMaskBusy[label] = true
@@ -3639,6 +3654,9 @@ end -- end scoped leaderboard name-mask block
 
 v238 = { EffectEnabled = false, CardEnabled = false, BallEnabled = false }
 
+-- LOCOPANI: pools do randomizador (multi-select). Vazio = sorteia entre todos.
+LOCOPANI_RandomPool = { ScoreEffect = {}, Ball = {}, PlayerCard = {} }
+
 do
   local function f51()
     local f50_2 = f50("Ball")
@@ -3660,48 +3678,53 @@ do
     if f50_3 then
       scoreEffect = f50_3
 
-      if v202 then
-        disableHitEffect()
-        task.wait(0.1)
-        enableHitEffect()
-      end
-
       v174:Notify("Random Effect: " .. f50_3)
     end
   end
 
   function f50(p126)
-    local findFirstChild3
-
-    if type(p126) == "string" then
-      findFirstChild3 = replicatedStorage.Assets:FindFirstChild(p126)
-
-      if not findFirstChild3 then
-        findFirstChild3 = replicatedStorage:FindFirstChild(p126)
+    -- LOCOPANI: 1) se houver itens marcados no dropdown, sorteia só entre eles.
+    local pool = LOCOPANI_RandomPool and LOCOPANI_RandomPool[p126]
+    if type(pool) == "table" then
+      local chosen = {}
+      for name, enabled in pairs(pool) do
+        if enabled == true then table.insert(chosen, name) end
       end
-
-      if not findFirstChild3 then
-        findFirstChild3 = replicatedStorage.Content:FindFirstChild(p126)
+      if #chosen > 0 then
+        return chosen[math.random(1, #chosen)]
       end
     end
 
-    if not findFirstChild3 then
-      return nil
-    else
-      local v239 = {}
+    -- 2) sem seleção: sorteia entre todos os itens da pasta do jogo.
+    local names = {}
+    if type(p126) == "string" then
+      local folder = replicatedStorage:FindFirstChild("Assets") and replicatedStorage.Assets:FindFirstChild(p126)
+        or replicatedStorage:FindFirstChild(p126)
+        or (replicatedStorage:FindFirstChild("Content") and replicatedStorage.Content:FindFirstChild(p126))
 
-      for index34, value41 in ipairs(findFirstChild3:GetChildren()) do
-        if value41:IsA("ModuleScript") or value41:IsA("Model") or value41:IsA("Folder") then
-          table.insert(v239, value41.Name)
+      if folder then
+        for _, child in ipairs(folder:GetChildren()) do
+          if child:IsA("ModuleScript") or child:IsA("Model") or child:IsA("Folder") then
+            table.insert(names, child.Name)
+          end
         end
       end
-
-      if #v239 == 0 then
-        return nil
-      end
-
-      return v239[math.random(1, #v239)]
     end
+
+    -- 3) pasta não encontrada: usa a mesma lista que aparece nos dropdowns.
+    if #names == 0 then
+      local fallback = (p126 == "Ball" and v212) or (p126 == "ScoreEffect" and v205)
+        or (p126 == "PlayerCard" and v210) or nil
+      if type(fallback) == "table" then
+        for _, name in ipairs(fallback) do table.insert(names, name) end
+      end
+    end
+
+    if #names == 0 then
+      return nil
+    end
+
+    return names[math.random(1, #names)]
   end
 
   local function f53(p127)
@@ -3709,9 +3732,8 @@ do
       return
     end
 
-    if p127.Name == "HitIndicator" then
-      f52()
-    end
+    -- LOCOPANI: o sorteio do Score Effect agora acontece dentro de f114
+    -- (no momento exato em que o efeito é disparado).
   end
 
   local function f54(p128)
@@ -8306,6 +8328,14 @@ local function f113()
       local Child_3 = workspace:FindFirstChild(localPlayer2.Name)
         or workspace:FindFirstChild("uwuwuwiiwuw6")
 
+      if v238 and v238.EffectEnabled then
+        local randomEffect = f50("ScoreEffect")
+        if randomEffect then
+          scoreEffect = randomEffect
+          pcall(function() v174:Notify("Random Effect: " .. randomEffect) end)
+        end
+      end
+
       local ScoreEffect_2 = scoreEffect
       local v535 = true
 
@@ -9842,14 +9872,571 @@ v546.CharMoveGroup:AddToggle("autoshiftlock", {
   Callback = function(value143) f112(value143) end,
 })
 
+v546.CharMoveGroup:AddLabel("Auto Shift Lock bind"):AddKeyPicker("autoshiftlockbind", {
+  Default = "V",
+  Mode = "Press",
+  Text = "Auto Shift Lock",
+  Callback = function()
+    local autoshiftlock = toggles.autoshiftlock
+
+    if autoshiftlock then
+      autoshiftlock:SetValue(not autoshiftlock.Value)
+    end
+  end,
+})
+
+do
+-- LOCOPANI: Copy Skin (visual local). Digite o username de qualquer jogador do Roblox
+-- e a aparência dele é aplicada no seu personagem, só na sua tela.
+local CS = {}
+CS.group = v545.Character:AddLeftGroupbox("Copy Skin")
+CS.original = nil
+CS.copied = nil
+
+function CS.skinLog(message)
+  warn("[LOCOPANI Copy Skin] " .. tostring(message))
+end
+
+function CS.getMyHumanoid()
+  local character = localPlayer2 and localPlayer2.Character
+  return character and character:FindFirstChildOfClass("Humanoid")
+end
+
+-- 1) jogador no servidor, 2) API oficial, 3) request do executor.
+function CS.fetchUserId(name)
+  local lowered = string.lower(name)
+  for _, plr in ipairs(players:GetPlayers()) do
+    if string.lower(plr.Name) == lowered or string.lower(plr.DisplayName) == lowered then
+      return plr.UserId
+    end
+  end
+
+  local okId, id = pcall(function() return players:GetUserIdFromNameAsync(name) end)
+  if okId and id then
+    return id
+  end
+  CS.skinLog("GetUserIdFromNameAsync falhou: " .. tostring(id))
+
+  local req = (syn and syn.request) or http_request or request or (http and http.request)
+  if req then
+    local okReq, res = pcall(function()
+      return req({
+        Url = "https://users.roblox.com/v1/usernames/users",
+        Method = "POST",
+        Headers = { ["Content-Type"] = "application/json" },
+        Body = game:GetService("HttpService"):JSONEncode({ usernames = { name }, excludeBannedUsers = false }),
+      })
+    end)
+    if okReq and res and res.Body then
+      local okJson, data = pcall(function() return game:GetService("HttpService"):JSONDecode(res.Body) end)
+      if okJson and data and data.data and data.data[1] and data.data[1].id then
+        return data.data[1].id
+      end
+    else
+      CS.skinLog("request falhou: " .. tostring(res))
+    end
+  end
+
+  return nil
+end
+
+function CS.loadAsset(assetId)
+  local ok, objects = pcall(function()
+    return game:GetObjects("rbxassetid://" .. tostring(assetId))
+  end)
+  if ok and type(objects) == "table" and objects[1] then
+    return objects[1]
+  end
+  local reason = ok and "asset vazio" or tostring(objects)
+  CS.lastError = reason
+  CS.skinLog("GetObjects falhou para " .. tostring(assetId) .. ": " .. reason)
+  return nil
+end
+
+-- Lista os ids de acessórios da descrição (GetAccessories ou campos de texto).
+function CS.collectAccessoryIds(description)
+  local ids = {}
+  local seen = {}
+  local function add(id)
+    id = tonumber(id)
+    if id and id > 0 and not seen[id] then
+      seen[id] = true
+      table.insert(ids, id)
+    end
+  end
+
+  local okAcc, accessories = pcall(function() return description:GetAccessories(true) end)
+  if okAcc and type(accessories) == "table" then
+    for _, info in ipairs(accessories) do add(info.AssetId) end
+  end
+
+  if #ids == 0 then
+    for _, field in ipairs({
+      "HatAccessory", "HairAccessory", "FaceAccessory", "NeckAccessory",
+      "ShouldersAccessory", "FrontAccessory", "BackAccessory", "WaistAccessory",
+    }) do
+      local okField, value = pcall(function() return description[field] end)
+      if okField and type(value) == "string" then
+        for id in string.gmatch(value, "%d+") do add(id) end
+      end
+    end
+  end
+
+  return ids
+end
+
+-- Encaixa o acessório no personagem (AddAccessory; se não soldar, solda pelo Attachment).
+function CS.attachAccessory(character, humanoid, accessory)
+  pcall(function() humanoid:AddAccessory(accessory) end)
+  if accessory.Parent ~= character then
+    accessory.Parent = character
+  end
+
+  local handle = accessory:FindFirstChild("Handle")
+  if not handle then
+    return accessory.Parent == character
+  end
+
+  local welded = false
+  for _, child in ipairs(handle:GetChildren()) do
+    if child:IsA("JointInstance") or child:IsA("WeldConstraint") then
+      welded = true
+      break
+    end
+  end
+
+  if not welded then
+    local handleAttachment = handle:FindFirstChildOfClass("Attachment")
+    local characterAttachment = nil
+    if handleAttachment then
+      for _, part in ipairs(character:GetChildren()) do
+        if part:IsA("BasePart") then
+          local found = part:FindFirstChild(handleAttachment.Name)
+          if found and found:IsA("Attachment") then
+            characterAttachment = found
+            break
+          end
+        end
+      end
+    end
+
+    local weld = Instance.new("Weld")
+    weld.Name = "AccessoryWeld"
+    if handleAttachment and characterAttachment then
+      weld.Part0 = characterAttachment.Parent
+      weld.C0 = characterAttachment.CFrame
+      weld.C1 = handleAttachment.CFrame
+    else
+      local head = character:FindFirstChild("Head")
+      if not head then
+        return false
+      end
+      weld.Part0 = head
+      weld.C0 = CFrame.new(0, head.Size.Y / 2, 0)
+      weld.C1 = accessory.AttachmentPoint
+    end
+    weld.Part1 = handle
+    weld.Parent = handle
+  end
+
+  pcall(function()
+    handle.Anchored = false
+    handle.CanCollide = false
+    handle.Massless = true
+  end)
+  return true
+end
+
+-- Baixa todos os acessórios primeiro; só troca os atuais se algum baixar.
+-- Retorna (colocados, total).
+function CS.attachAccessories(character, humanoid, description)
+  local ids = CS.collectAccessoryIds(description)
+
+  if #ids == 0 then
+    for _, child in ipairs(character:GetChildren()) do
+      if child:IsA("Accessory") then child:Destroy() end
+    end
+    return 0, 0
+  end
+
+  local loaded = {}
+  for _, id in ipairs(ids) do
+    local obj = CS.loadAsset(id)
+    local accessory = nil
+    if obj then
+      accessory = obj:IsA("Accessory") and obj or obj:FindFirstChildWhichIsA("Accessory", true)
+      if not accessory then
+        CS.lastError = "asset " .. tostring(id) .. " não é um Accessory"
+        CS.skinLog(CS.lastError)
+      end
+    end
+    if accessory then
+      table.insert(loaded, accessory)
+    end
+  end
+
+  if #loaded == 0 then
+    return 0, #ids
+  end
+
+  for _, child in ipairs(character:GetChildren()) do
+    if child:IsA("Accessory") then child:Destroy() end
+  end
+
+  local attached = 0
+  for _, accessory in ipairs(loaded) do
+    local okAttach, result = pcall(CS.attachAccessory, character, humanoid, accessory)
+    if okAttach and result then
+      attached = attached + 1
+    else
+      CS.lastError = tostring(result)
+      CS.skinLog("não encaixou o acessório: " .. tostring(result))
+    end
+  end
+
+  return attached, #ids
+end
+
+-- Plano B: monta a aparência manualmente (cores, roupas, rosto e acessórios).
+function CS.manualApply(character, humanoid, description)
+  local bodyColors = character:FindFirstChildOfClass("BodyColors")
+  if bodyColors then
+    pcall(function()
+      bodyColors.HeadColor3 = description.HeadColor
+      bodyColors.TorsoColor3 = description.TorsoColor
+      bodyColors.LeftArmColor3 = description.LeftArmColor
+      bodyColors.RightArmColor3 = description.RightArmColor
+      bodyColors.LeftLegColor3 = description.LeftLegColor
+      bodyColors.RightLegColor3 = description.RightLegColor
+    end)
+  end
+
+  local function setClothing(className, assetId)
+    for _, child in ipairs(character:GetChildren()) do
+      if child:IsA(className) then child:Destroy() end
+    end
+    if assetId and assetId ~= 0 then
+      local obj = CS.loadAsset(assetId)
+      if obj and obj:IsA(className) then obj.Parent = character end
+    end
+  end
+
+  setClothing("Shirt", description.Shirt)
+  setClothing("Pants", description.Pants)
+  setClothing("ShirtGraphic", description.GraphicTShirt)
+
+  local head = character:FindFirstChild("Head")
+  if head and description.Face and description.Face ~= 0 then
+    local face = CS.loadAsset(description.Face)
+    if face and face:IsA("Decal") then
+      local oldFace = head:FindFirstChildOfClass("Decal")
+      if oldFace then oldFace:Destroy() end
+      face.Parent = head
+    end
+  end
+
+end
+
+function CS.applyDescription(description)
+  local humanoid = CS.getMyHumanoid()
+  if not humanoid or not description then
+    return false, "personagem não carregado"
+  end
+  local character = humanoid.Parent
+  CS.lastError = nil
+
+  local before = {}
+  for _, child in ipairs(character:GetChildren()) do
+    if child:IsA("Accessory") then before[child] = true end
+  end
+
+  local ok, err = pcall(function() humanoid:ApplyDescription(description) end)
+  if not ok then
+    CS.skinLog("ApplyDescription falhou: " .. tostring(err))
+    local ok2, err2 = pcall(CS.manualApply, character, humanoid, description)
+    if not ok2 then
+      CS.skinLog("Aplicação manual falhou: " .. tostring(err2))
+      return false, tostring(err)
+    end
+  end
+
+  task.wait(0.5)
+
+  -- Se o ApplyDescription já trouxe os acessórios novos, não mexe mais.
+  local total = #CS.collectAccessoryIds(description)
+  local fresh = 0
+  for _, child in ipairs(character:GetChildren()) do
+    if child:IsA("Accessory") and not before[child] then fresh = fresh + 1 end
+  end
+  if total > 0 and fresh >= total then
+    return true, nil, fresh, total
+  end
+
+  local okAcc, attached, total2 = pcall(CS.attachAccessories, character, humanoid, description)
+  if okAcc then
+    return true, nil, attached, total2
+  end
+  CS.lastError = tostring(attached)
+  CS.skinLog("acessórios falharam: " .. tostring(attached))
+  return true, nil, 0, total
+end
+
+CS.group:AddInput("copyskinname", {
+  Default = "",
+  Text = "Roblox Username",
+  Placeholder = "Nome do jogador",
+  Callback = function() end,
+})
+
+CS.group:AddButton({
+  Text = "Copy Skin",
+  Func = function()
+    local name = ""
+    pcall(function() name = tostring(options.copyskinname.Value or "") end)
+    name = name:gsub("^%s+", ""):gsub("%s+$", "")
+
+    if name == "" then
+      v174:Notify("Digite o nome de um jogador primeiro")
+      return
+    end
+
+    task.spawn(function()
+      local userId = CS.fetchUserId(name)
+      if not userId then
+        v174:Notify("Não achei o jogador: " .. name)
+        return
+      end
+
+      local humanoid = CS.getMyHumanoid()
+      if not humanoid then
+        v174:Notify("Seu personagem ainda não carregou")
+        return
+      end
+
+      -- Guarda a sua aparência original só na primeira cópia.
+      if not CS.original then
+        local okOrig, orig = pcall(function() return humanoid:GetAppliedDescription() end)
+        if okOrig and orig then
+          CS.original = orig
+        else
+          pcall(function()
+            CS.original = players:GetHumanoidDescriptionFromUserId(localPlayer2.UserId)
+          end)
+        end
+      end
+
+      local okDesc, description = pcall(function()
+        return players:GetHumanoidDescriptionFromUserId(userId)
+      end)
+      if not okDesc or not description then
+        CS.skinLog("GetHumanoidDescriptionFromUserId falhou: " .. tostring(description))
+        v174:Notify("Não consegui carregar a skin de " .. name .. ": " .. tostring(description))
+        return
+      end
+
+      local applied, reason, attached, total = CS.applyDescription(description)
+      if applied then
+        CS.copied = description
+        local note = "Skin copiada: " .. name .. " (acessórios " .. tostring(attached or 0) .. "/" .. tostring(total or 0) .. ")"
+        if (attached or 0) < (total or 0) and CS.lastError then
+          note = note .. " - " .. tostring(CS.lastError)
+        end
+        v174:Notify(note)
+      else
+        v174:Notify("Falhou ao aplicar: " .. tostring(reason))
+      end
+    end)
+  end,
+})
+
+CS.group:AddButton({
+  Text = "Restore My Skin",
+  Func = function()
+    CS.copied = nil
+    task.spawn(function()
+      if CS.original and CS.applyDescription(CS.original) then
+        v174:Notify("Skin original restaurada")
+      else
+        v174:Notify("Nada para restaurar")
+      end
+    end)
+  end,
+})
+
+-- Reaplica a skin copiada quando você renascer.
+if localPlayer2 then
+  localPlayer2.CharacterAdded:Connect(function(character)
+    if not CS.copied then
+      return
+    end
+    local humanoid = character:WaitForChild("Humanoid", 10)
+    if humanoid then
+      task.wait(1)
+      if CS.copied then
+        CS.applyDescription(CS.copied)
+      end
+    end
+  end)
+end
+end -- end Copy Skin
+
+do
+-- Character Enemy/Team Line: draw a forward-facing line from each character.
+-- The attachments are parented to HumanoidRootPart, so the line follows its facing direction.
+local LOCOPANI_CharacterLines = {
+  Enabled = false,
+  Distance = 50,
+  Thickness = 0.09,
+  EnemyColor = Color3.fromRGB(255, 70, 70),
+  TeamColor = Color3.fromRGB(70, 170, 255),
+  Connection = nil,
+}
+
+local function LOCOPANI_RemoveCharacterLine(player)
+  local record = v229[player]
+  if record then
+    if record.Beam then pcall(function() record.Beam:Destroy() end) end
+    if record.Start then pcall(function() record.Start:Destroy() end) end
+    if record.Finish then pcall(function() record.Finish:Destroy() end) end
+    v229[player] = nil
+  end
+end
+
+local function LOCOPANI_UpdateCharacterLine(player)
+  if player == localPlayer2 or not LOCOPANI_CharacterLines.Enabled then
+    LOCOPANI_RemoveCharacterLine(player)
+    return
+  end
+
+  local character = player.Character
+  local root = character and character:FindFirstChild("HumanoidRootPart")
+  local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+  if not root or not humanoid or humanoid.Health <= 0 then
+    LOCOPANI_RemoveCharacterLine(player)
+    return
+  end
+
+  local localTeam = localPlayer2.Team
+  local otherTeam = player.Team
+  local lineColor
+  if localTeam and otherTeam then
+    lineColor = (localTeam == otherTeam)
+      and LOCOPANI_CharacterLines.TeamColor
+      or LOCOPANI_CharacterLines.EnemyColor
+  else
+    -- If Team objects are unavailable, use the enemy color as a consistent fallback.
+    lineColor = LOCOPANI_CharacterLines.EnemyColor
+  end
+
+  local record = v229[player]
+  if not record or record.Root ~= root or not record.Beam or not record.Beam.Parent then
+    LOCOPANI_RemoveCharacterLine(player)
+
+    local startAttachment = Instance.new("Attachment")
+    startAttachment.Name = "LOCOPANI_CharacterLineStart"
+    startAttachment.Position = Vector3.new(0, 0, 0)
+    startAttachment.Parent = root
+
+    local endAttachment = Instance.new("Attachment")
+    endAttachment.Name = "LOCOPANI_CharacterLineEnd"
+    endAttachment.Position = Vector3.new(0, 0, -LOCOPANI_CharacterLines.Distance)
+    endAttachment.Parent = root
+
+    local beam = Instance.new("Beam")
+    beam.Name = "LOCOPANI_CharacterAimLine"
+    beam.Attachment0 = startAttachment
+    beam.Attachment1 = endAttachment
+    beam.FaceCamera = true
+    beam.Width0 = LOCOPANI_CharacterLines.Thickness
+    beam.Width1 = LOCOPANI_CharacterLines.Thickness * 0.5
+    beam.LightEmission = 0.7
+    beam.Transparency = NumberSequence.new(0.12)
+    beam.Color = ColorSequence.new(lineColor)
+    beam.Parent = root
+
+    record = { Root = root, Start = startAttachment, Finish = endAttachment, Beam = beam }
+    v229[player] = record
+  end
+
+  record.Finish.Position = Vector3.new(0, 0, -LOCOPANI_CharacterLines.Distance)
+  record.Beam.Width0 = LOCOPANI_CharacterLines.Thickness
+  record.Beam.Width1 = LOCOPANI_CharacterLines.Thickness * 0.5
+  record.Beam.Color = ColorSequence.new(lineColor)
+end
+
+local function LOCOPANI_SetCharacterLines(enabled)
+  LOCOPANI_CharacterLines.Enabled = enabled and true or false
+  if LOCOPANI_CharacterLines.Connection then
+    LOCOPANI_CharacterLines.Connection:Disconnect()
+    LOCOPANI_CharacterLines.Connection = nil
+  end
+
+  if not LOCOPANI_CharacterLines.Enabled then
+    for player in pairs(v229) do
+      LOCOPANI_RemoveCharacterLine(player)
+    end
+    return
+  end
+
+  for _, player in ipairs(players:GetPlayers()) do
+    LOCOPANI_UpdateCharacterLine(player)
+  end
+  LOCOPANI_CharacterLines.Connection = runService.Heartbeat:Connect(function()
+    for _, player in ipairs(players:GetPlayers()) do
+      LOCOPANI_UpdateCharacterLine(player)
+    end
+    for player in pairs(v229) do
+      if not player.Parent then LOCOPANI_RemoveCharacterLine(player) end
+    end
+  end)
+end
+
 v546.CharMoveGroup:AddToggle("characterlines", {
   Text = "Character Enemy/Team Line",
   Tooltip = "Show colored beams to enemies",
   Default = false,
   Callback = function(value144)
-    if not value144 then
-      for key22 in pairs(v229) do
-        removeLine(key22)
+    LOCOPANI_SetCharacterLines(value144)
+  end,
+})
+
+v546.CharMoveGroup:AddSlider("linethickness", {
+  Text = "Line Thickness",
+  Default = 0.09,
+  Min = 0.01,
+  Max = 0.5,
+  Rounding = 2,
+  Callback = function(value145)
+    LOCOPANI_CharacterLines.Thickness = tonumber(value145) or 0.09
+    if LOCOPANI_CharacterLines.Enabled then
+      for _, player in ipairs(players:GetPlayers()) do
+        LOCOPANI_UpdateCharacterLine(player)
+      end
+    end
+  end,
+})
+
+v546.CharMoveGroup:AddColorPicker("lineenemycolor", {
+  Text = "Enemy Line Color",
+  Default = Color3.fromRGB(255, 70, 70),
+  Callback = function(color, alpha)
+    if typeof(color) == "Color3" then
+      LOCOPANI_CharacterLines.EnemyColor = color
+      if LOCOPANI_CharacterLines.Enabled then
+        for _, player in ipairs(players:GetPlayers()) do LOCOPANI_UpdateCharacterLine(player) end
+      end
+    end
+  end,
+})
+
+v546.CharMoveGroup:AddColorPicker("lineteamcolor", {
+  Text = "Team Line Color",
+  Default = Color3.fromRGB(70, 170, 255),
+  Callback = function(color, alpha)
+    if typeof(color) == "Color3" then
+      LOCOPANI_CharacterLines.TeamColor = color
+      if LOCOPANI_CharacterLines.Enabled then
+        for _, player in ipairs(players:GetPlayers()) do LOCOPANI_UpdateCharacterLine(player) end
       end
     end
   end,
@@ -9861,8 +10448,17 @@ v546.CharMoveGroup:AddSlider("linedistance", {
   Min = 10,
   Max = 200,
   Rounding = 1,
-  Callback = function(value145) end,
+  Callback = function(value146)
+    LOCOPANI_CharacterLines.Distance = tonumber(value146) or 50
+    if LOCOPANI_CharacterLines.Enabled then
+      for _, player in ipairs(players:GetPlayers()) do
+        LOCOPANI_UpdateCharacterLine(player)
+      end
+    end
+  end,
 })
+
+end
 
 v545.Visuals:AddRightGroupbox("Ball Prediction"):AddToggle("ballmarker", {
   Text = "Landing Marker",
@@ -10467,7 +11063,39 @@ v546.VisualScoreGroup:AddToggle("randomeffect", {
   Text = "Random Effect",
   Tooltip = "Pick random effect when HitIndicator appears",
   Default = false,
-  Callback = function(value149) v238.EffectEnabled = value149 end,
+  Callback = function(value149)
+    v238.EffectEnabled = value149
+
+    -- O sorteio precisa do hook do ScoreEffect Changer ativo.
+    if value149 and not v202 then
+      v202 = true
+      f113()
+    elseif not value149 then
+      local changerOn = false
+      pcall(function() changerOn = toggles.scoreeffect.Value == true end)
+      if not changerOn and v202 then
+        v202 = false
+        f115()
+      end
+    end
+  end,
+})
+
+v546.VisualScoreGroup:AddDropdown("randomeffectpool", {
+  Values = v205,
+  Default = {},
+  Multi = true,
+  Text = "Random Effect: efeitos sorteados (vazio = todos)",
+  Callback = function(selected)
+    local pool = {}
+    if type(selected) == "table" then
+      for key, value in pairs(selected) do
+        if type(key) == "string" and value == true then pool[key] = true
+        elseif type(key) == "number" and type(value) == "string" then pool[value] = true end
+      end
+    end
+    LOCOPANI_RandomPool.ScoreEffect = pool
+  end,
 })
 
 v546.VisualProtectGroup = v545.Visuals:AddRightGroupbox("Protection")
@@ -10658,6 +11286,23 @@ v546.PlayerCardGroup:AddToggle("randomcard", {
   end,
 })
 
+v546.PlayerCardGroup:AddDropdown("randomcardpool", {
+  Values = v210,
+  Default = {},
+  Multi = true,
+  Text = "Random Card: cards sorteados (vazio = todos)",
+  Callback = function(selected)
+    local pool = {}
+    if type(selected) == "table" then
+      for key, value in pairs(selected) do
+        if type(key) == "string" and value == true then pool[key] = true
+        elseif type(key) == "number" and type(value) == "string" then pool[value] = true end
+      end
+    end
+    LOCOPANI_RandomPool.PlayerCard = pool
+  end,
+})
+
 v545.Visuals:AddRightGroupbox("Title Changer"):AddToggle("titleunlock", {
   Text = "Title Changer",
   Tooltip = "Change title",
@@ -10695,6 +11340,23 @@ v546.BallSkinGroup:AddToggle("randomball", {
   Tooltip = "Pick random ball when ball spawns",
   Default = false,
   Callback = function(value164) v238.BallEnabled = value164 end,
+})
+
+v546.BallSkinGroup:AddDropdown("randomballpool", {
+  Values = v212,
+  Default = {},
+  Multi = true,
+  Text = "Random Ball: bolas sorteadas (vazio = todas)",
+  Callback = function(selected)
+    local pool = {}
+    if type(selected) == "table" then
+      for key, value in pairs(selected) do
+        if type(key) == "string" and value == true then pool[key] = true
+        elseif type(key) == "number" and type(value) == "string" then pool[value] = true end
+      end
+    end
+    LOCOPANI_RandomPool.Ball = pool
+  end,
 })
 
 v546.VisualLevelGroup = v545.Visuals:AddRightGroupbox("Visual Level")
